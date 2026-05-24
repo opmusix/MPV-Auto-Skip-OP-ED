@@ -140,24 +140,57 @@ end
 
 local function tick()
     time_left = time_left - 0.25
+
     local ass_start = mp.get_property("osd-ass-cc/0") or ""
     local ass_end = mp.get_property("osd-ass-cc/1") or ""
 
     if time_left > 0 then
-        local hex_color = get_color_transition(time_left)
-        local display_sec = math.ceil(time_left)
+        local fake_display
+
+        -- Fake 3 second display over actual 5 seconds
+        if time_left > 2.47 then
+    fake_display = 3
+elseif time_left > 1.23 then
+    fake_display = 2
+else
+    fake_display = 1
+end
+
+        -- Convert fake display into smooth color timing
+        local visual_time = fake_display
+
+        if fake_display == 3 then
+            visual_time = 2.5
+        elseif fake_display == 2 then
+            visual_time = 1.5
+        else
+            visual_time = 0.5
+        end
+
+        local hex_color = get_color_transition(visual_time)
 
         mp.osd_message(
-            ass_start .. "{\\an7\\fs12\\b1\\c&HFFFFFF&}Skipping in {\\c&H" .. hex_color .. "&}" .. display_sec .. ass_end,
+            ass_start ..
+            "{\\an7\\fs12\\b1\\c&HFFFFFF&}Skipping in {\\c&H" ..
+            hex_color .. "&}" .. fake_display ..
+            ass_end,
             0.3
         )
+
         return
     end
 
     clear_timer()
     mp.set_property_number("time-pos", pending.end_)
-    
-    mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&HFFFFFF&}✓ SKIPPED " .. pending.type:upper() .. ass_end, 2)
+
+    mp.osd_message(
+        ass_start ..
+        "{\\an7\\fs12\\b1\\c&HFFFFFF&}✓ SKIPPED " ..
+        pending.type:upper() ..
+        ass_end,
+        2
+    )
+
     pending = nil
 end
 
@@ -178,7 +211,7 @@ local function check(_, pos)
 
             if enabled and not ignored[tostring(r.start)] then
                 pending = r
-                time_left = 3.0
+                time_left = 3.7
                 
                 local ass_start = mp.get_property("osd-ass-cc/0") or ""
                 local ass_end = mp.get_property("osd-ass-cc/1") or ""
