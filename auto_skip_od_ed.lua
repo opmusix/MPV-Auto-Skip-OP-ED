@@ -79,40 +79,121 @@ local function scan()
     local found_explicit_op = false
     local found_explicit_ed = false
 
+    -- Collect chapter data
     for i = 0, count - 1 do
         local start = mp.get_property_number("chapter-list/" .. i .. "/time")
-        local title = (mp.get_property("chapter-list/" .. i .. "/title") or ""):lower()
-        local next_start = (i == count - 1) and duration or mp.get_property_number("chapter-list/" .. (i + 1) .. "/time")
-        
-        table.insert(chapters, {
-            start = start, end_ = next_start, title = title, duration = next_start - start
-        })
 
-        if title:find("op") or title:find("opening") then found_explicit_op = true end
-        if title:find("ed") or title:find("ending") then found_explicit_ed = true end
+        local title =
+            (mp.get_property("chapter-list/" .. i .. "/title") or "")
+            :lower()
+
+        local next_start =
+            (i == count - 1)
+            and duration
+            or mp.get_property_number(
+                "chapter-list/" .. (i + 1) .. "/time"
+            )
+
+        local chapter = {
+            start = start,
+            end_ = next_start,
+            title = title,
+            duration = next_start - start
+        }
+
+        table.insert(chapters, chapter)
+
+        if title:find("op") or title:find("opening") then
+            found_explicit_op = true
+        end
+
+        if title:find("ed") or title:find("ending") then
+            found_explicit_ed = true
+        end
     end
+
+    local best_op = nil
+    local best_ed = nil
 
     for _, c in ipairs(chapters) do
         local t = c.title
-        local explicit_op = t:find("op") or t:find("opening")
-        local explicit_ed = t:find("ed") or t:find("ending")
-        
-        local is_protected = t:find("intro") or t:find("prologue") or t:find("part") or t:find("scene") or t:find("pv") or t:find("preview") or t:find("continued")
 
+        local explicit_op =
+            t:find("op") or t:find("opening")	
+
+        local explicit_ed =
+            t:find("ed") or t:find("ending")
+
+        local is_protected =
+            t:find("intro") or
+            t:find("prologue") or
+            t:find("part") or
+            t:find("scene") or
+            t:find("pv") or
+            t:find("preview") or
+            t:find("continued")
+
+        -- Explicit labels always win
         if explicit_op then
-            table.insert(ranges, {start=c.start, end_=c.end_, type="op"})
+            table.insert(ranges, {
+                start = c.start,
+                end_ = c.end_,
+                type = "op"
+            })
+
         elseif explicit_ed then
-            table.insert(ranges, {start=c.start, end_=c.end_, type="ed"})
+            table.insert(ranges, {
+                start = c.start,
+                end_ = c.end_,
+                type = "ed"
+            })
+
         elseif not is_protected then
-            if not found_explicit_op and is_op_range(c.start, c.duration, duration) then
-                table.insert(ranges, {start=c.start, end_=c.end_, type="op"})
-            elseif not found_explicit_ed and is_ed_range(c.start, c.duration, duration) then
-                table.insert(ranges, {start=c.start, end_=c.end_, type="ed"})
+            local d = c.duration
+
+            -- Smart heuristic detection
+            if d >= 75 and d <= 110 then
+
+                -- Candidate OP
+                if c.start < duration * 0.45 then
+                    if not best_op or
+                        math.abs(d - 90) <
+                        math.abs(best_op.duration - 90)
+                    then
+                        best_op = c
+                    end
+                end
+
+                -- Candidate ED
+                if c.start > duration * 0.55 then
+                    if not best_ed or
+                        math.abs(d - 90) <
+                        math.abs(best_ed.duration - 90)
+                    then
+                        best_ed = c
+                    end
+                end
             end
         end
     end
-end
 
+    -- Only use heuristics if explicit labels weren't found
+    if not found_explicit_op and best_op then
+        table.insert(ranges, {
+            start = best_op.start,
+            end_ = best_op.end_,
+            type = "op"
+        })
+    end
+
+    if not found_explicit_ed and best_ed then
+        table.insert(ranges, {
+            start = best_ed.start,
+            end_ = best_ed.end_,
+            type = "ed"
+        })
+    end
+end
 ------------------------------------------------------------
 -- UI AND TIMER LOGIC
 ------------------------------------------------------------
@@ -228,22 +309,31 @@ end
 -- PAUSE CANCEL
 ------------------------------------------------------------
 
+local ass_start_cache = mp.get_property("osd-ass-cc/0") or ""
+local ass_end_cache = mp.get_property("osd-ass-cc/1") or ""
+
 local function on_pause(_, paused)
-    if paused and pending and active_timer then
-        clear_timer()
-
-        ignored[tostring(pending.start)] = true
-        
-        local ass_start = mp.get_property("osd-ass-cc/0") or ""
-        local ass_end = mp.get_property("osd-ass-cc/1") or ""
-        mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&H888888&}[SKIP CANCELLED]" .. ass_end, 2)
-
-        pending = nil
-
-        mp.add_timeout(0.5, function()
-            mp.set_property_bool("pause", false)
-        end)
+    if not paused or not pending or not active_timer then
+        return
     end
+
+    clear_timer()
+
+    ignored[tostring(pending.start)] = true
+
+    mp.osd_message(
+        ass_start_cache ..
+        "{\\an7\\fs12\\b1\\c&H888888&}[SKIP CANCELLED]" ..
+        ass_end_cache,
+        2
+    )
+
+    pending = nil
+
+    -- ultra-fast but stable
+    mp.add_timeout(0.01, function()
+        mp.set_property_bool("pause", false)
+    end)
 end
 
 ------------------------------------------------------------
