@@ -1,6 +1,7 @@
 -- auto_skip_op_ed.lua
 local mp = require('mp')
 local utils = require('mp.utils')
+local msg = require('mp.msg')
 
 ------------------------------------------------------------
 -- CONFIG
@@ -51,9 +52,6 @@ local function clear_timer()
     end
 end
 
-------------------------------------------------------------
--- COLOR SYSTEM (GREEN → RED + ALARM MODE)
-------------------------------------------------------------
 local function get_color(t)
     if t > 2.5 then
         local ratio = (5.0 - t) / 2.5
@@ -62,28 +60,18 @@ local function get_color(t)
         return string.format("%02X%02X%02X", 0, g, r)
     else
         local blink = math.floor((mp.get_time() * 5) % 2)
-        if blink == 0 then
-            return "FFFFFF"
-        else
-            return "0000FF"
-        end
+        if blink == 0 then return "FFFFFF" else return "0000FF" end
     end
 end
 
 ------------------------------------------------------------
--- CHAPTER ANALYSIS (IMPROVED CLUSTERING)
+-- HEURISTIC FALLBACK (Your optimized local clustering)
 ------------------------------------------------------------
-local function scan()
-    ranges = {}
-    ignored = {}
-    clear_timer()
-    pending = nil
-
+local function run_local_fallback()
+    msg.info("AniSkip failed or not found. Running local chapter clustering...")
     local count = mp.get_property_number("chapter-list/count", 0)
-    if count == 0 then return end
-
     local duration = mp.get_property_number("duration")
-    if not duration then return end
+    if count == 0 or not duration then return end
 
     local chapters = {}
     local found_op, found_ed = false, false
@@ -91,18 +79,9 @@ local function scan()
     for i = 0, count - 1 do
         local start = mp.get_property_number("chapter-list/" .. i .. "/time")
         local title = (mp.get_property("chapter-list/" .. i .. "/title") or ""):lower()
+        local next_start = (i == count - 1) and duration or mp.get_property_number("chapter-list/" .. (i + 1) .. "/time")
 
-        local next_start =
-            (i == count - 1) and duration
-            or mp.get_property_number("chapter-list/" .. (i + 1) .. "/time")
-
-        table.insert(chapters, {
-            start = start,
-            end_ = next_start,
-            title = title,
-            duration = next_start - start
-        })
-
+        table.insert(chapters, {start = start, end_ = next_start, title = title, duration = next_start - start})
         if title:find("op") or title:find("opening") then found_op = true end
         if title:find("ed") or title:find("ending") then found_ed = true end
     end
@@ -114,12 +93,7 @@ local function scan()
         local t = c.title
         local is_op = t:find("op") or t:find("opening")
         local is_ed = t:find("ed") or t:find("ending")
-
-        local protected =
-            t:find("intro") or t:find("prologue") or
-            t:find("part") or t:find("scene") or
-            t:find("pv") or t:find("preview") or
-            t:find("continued")
+        local protected = t:find("intro") or t:find("prologue") or t:find("part") or t:find("scene") or t:find("pv") or t:find("preview")
 
         if is_op then
             table.insert(ranges, {start=c.start, end_=c.end_, type="op"})
@@ -129,31 +103,15 @@ local function scan()
             local d = c.duration
             local pos_pct = c.start / duration
 
-            -- Clustering: Filter for typical OP/ED duration window
             if d >= 75 and d <= 110 then
-                -- Base penalty: absolute seconds away from exact 90s TV size
                 local dur_penalty = math.abs(d - 90) * 2 
-
-                -- OP Candidate (first 35% of video)
                 if pos_pct < 0.35 then
-                    -- Penalty increases the deeper into the video it starts
-                    local pos_penalty = pos_pct * 100 
-                    local score = dur_penalty + pos_penalty
-                    
-                    if score < best_op.score then
-                        best_op = {score = score, chapter = c}
-                    end
+                    local score = dur_penalty + (pos_pct * 100)
+                    if score < best_op.score then best_op = {score = score, chapter = c} end
                 end
-
-                -- ED Candidate (last 35% of video)
                 if pos_pct > 0.65 then
-                    -- Ideal ED start is around 92% (e.g., 22 mins into a 24 min ep)
-                    local pos_penalty = math.abs(pos_pct - 0.92) * 100
-                    local score = dur_penalty + pos_penalty
-                    
-                    if score < best_ed.score then
-                        best_ed = {score = score, chapter = c}
-                    end
+                    local score = dur_penalty + (math.abs(pos_pct - 0.92) * 100)
+                    if score < best_ed.score then best_ed = {score = score, chapter = c} end
                 end
             end
         end
@@ -162,56 +120,109 @@ local function scan()
     if not found_op and best_op.chapter then
         table.insert(ranges, {start=best_op.chapter.start, end_=best_op.chapter.end_, type="op"})
     end
-
     if not found_ed and best_ed.chapter then
         table.insert(ranges, {start=best_ed.chapter.start, end_=best_ed.chapter.end_, type="ed"})
     end
 end
 
 ------------------------------------------------------------
--- TICK (200ms ANIMATED SYSTEM)
+-- ANISKIP API INTEGRATION (SEANIME OPTIMIZED)
+------------------------------------------------------------
+local function fetch_aniskip_timestamps()
+    ranges = {}
+    ignored = {}
+    clear_timer()
+    pending = nil
+
+    local duration = mp.get_property_number("duration", 0)
+    if duration == 0 then return end
+
+    -- 1. Try to get exact IDs from Seanime's background data
+    local anilist_id = mp.get_property("user-data/seanime/anilist-id") or mp.get_property("user-data/seanime/mal-id")
+    local ep_num = mp.get_property("user-data/seanime/episode")
+    local url = ""
+
+    if anilist_id and ep_num then
+        -- Fast, 100% accurate endpoint using Seanime IDs
+        url = string.format("https://api.aniskip.com/v2/skip-times/%s/%s?types=op&types=ed&episodeLength=%s", 
+                            tonumber(anilist_id), tonumber(ep_num), math.floor(duration))
+    else
+        -- 2. Fallback: Parse filename if Seanime data is missing
+        local filename = mp.get_property("filename", "")
+        ep_num = filename:match("%s%-%s(%d+)") or filename:match("EP?%s*(%d+)") or filename:match("_%s*(%d+)")
+        local title_clean = filename:gsub("%[[^%]]+%]%s*", ""):match("^([^%-]+)") or ""
+        title_clean = title_clean:gsub("^%s*(.-)%s*$", "%1")
+
+        if not ep_num or title_clean == "" then
+            run_local_fallback()
+            return
+        end
+
+        local url_title = title_clean:gsub("([^%w])", function(c) return string.format("%%%02X", string.byte(c)) end)
+        url = string.format("https://api.aniskip.com/v2/skip-times/search?title=%s&episode=%s&duration=%s", url_title, tonumber(ep_num), duration)
+    end
+
+    -- Query AniSkip via background async process
+    mp.command_native_async({
+        name = "subprocess",
+        capture_stdout = true,
+        playback_only = false,
+        args = {"curl", "-s", "-f", "-A", "mpv-aniskip", url}
+    }, function(success, res)
+        if not success or not res.stdout or res.stdout == "" then
+            run_local_fallback()
+            return
+        end
+
+        local parsed = utils.parse_json(res.stdout)
+        if not parsed or parsed.statusCode ~= 200 or not parsed.results then
+            run_local_fallback()
+            return
+        end
+
+        msg.info("AniSkip API successfully fetched timestamps!")
+        for _, result in ipairs(parsed.results) do
+            local skip_type = result.skipType
+            if skip_type == "op" or skip_type == "ed" then
+                table.insert(ranges, {
+                    start = result.interval.startTime,
+                    end_ = result.interval.endTime,
+                    type = skip_type
+                })
+            end
+        end
+
+        if #ranges == 0 then run_local_fallback() end
+    end)
+end
+------------------------------------------------------------
+-- TICK ENGINE
 ------------------------------------------------------------
 local function tick()
     time_left = time_left - 0.2
-
     local ass_start = mp.get_property("osd-ass-cc/0") or ""
     local ass_end = mp.get_property("osd-ass-cc/1") or ""
 
     if time_left <= 0 then
         clear_timer()
         mp.set_property_number("time-pos", pending.end_)
-
-        mp.osd_message(
-            ass_start ..
-            "{\\an7\\fs12\\b1\\c&HFFFFFF&}✓ SKIPPED " ..
-            pending.type:upper() ..
-            ass_end,
-            2
-        )
-
+        mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&HFFFFFF&}✓ SKIPPED " .. pending.type:upper() .. ass_end, 2)
         pending = nil
         return
     end
 
     local color = get_color(time_left)
     local display = math.ceil(time_left)
-
-    mp.osd_message(
-        ass_start ..
-        "{\\an7\\fs12\\b1\\c&HFFFFFF&}Skipping in {\\c&H" ..
-        color ..
-        "&}" .. display ..
-        ass_end,
-        0.25
-    )
+    mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&HFFFFFF&}Skipping in {\\c&H" .. color .. "&}" .. display .. ass_end, 0.25)
 end
 
 ------------------------------------------------------------
--- CHECK
+-- LIVE TIMELINE MONITOR
 ------------------------------------------------------------
 local function check(_, pos)
     if not pos then return end
 
+    -- SAFETY NET: If counting down but user seeks OUTSIDE the OP/ED range, kill it
     if pending then
         if pos < pending.start or pos >= pending.end_ then
             clear_timer()
@@ -220,20 +231,16 @@ local function check(_, pos)
         return
     end
 
+    -- Scan ranges to initiate countdown
     for _, r in ipairs(ranges) do
         if pos >= r.start and pos < r.end_ - 1 then
-
-            local enabled =
-                (r.type == "op" and skip_op) or
-                (r.type == "ed" and skip_ed)
+            local enabled = (r.type == "op" and skip_op) or (r.type == "ed" and skip_ed)
 
             if enabled and not ignored[tostring(r.start)] then
                 pending = r
                 time_left = 5.0
-
                 tick()
                 active_timer = mp.add_periodic_timer(0.2, tick)
-
                 return
             end
         end
@@ -241,38 +248,24 @@ local function check(_, pos)
 end
 
 ------------------------------------------------------------
--- PAUSE CANCEL
+-- PAUSE CANCEL & TOGGLES
 ------------------------------------------------------------
 local function on_pause(_, paused)
     if not paused or not pending or not active_timer then return end
-
     clear_timer()
     ignored[tostring(pending.start)] = true
-
-    local ass_start_cache = mp.get_property("osd-ass-cc/0") or ""
-    local ass_end_cache = mp.get_property("osd-ass-cc/1") or ""
     
-    mp.osd_message(
-        ass_start_cache ..
-        "{\\an7\\fs12\\b1\\c&H888888&}[SKIP CANCELLED]" ..
-        ass_end_cache,
-        2
-    )
+    local ass_start = mp.get_property("osd-ass-cc/0") or ""
+    local ass_end = mp.get_property("osd-ass-cc/1") or ""
+    mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&H888888&}[SKIP CANCELLED]" .. ass_end, 2)
     
     pending = nil
-
-    mp.add_timeout(0.01, function()
-        mp.set_property_bool("pause", false)
-    end)
+    mp.add_timeout(0.01, function() mp.set_property_bool("pause", false) end)
 end
 
-------------------------------------------------------------
--- TOGGLES
-------------------------------------------------------------
 local function status(name, val)
     local ass_start = mp.get_property("osd-ass-cc/0") or ""
     local ass_end = mp.get_property("osd-ass-cc/1") or ""
-    
     if val then
         mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&HFFFFFF&}Skip " .. name .. ": {\\c&HFFFF00&}ON" .. ass_end, 4)
     else
@@ -280,24 +273,15 @@ local function status(name, val)
     end
 end
 
-local function toggle_op()
-    skip_op = not skip_op
-    save_settings()
-    status("OP", skip_op)
-end
-
-local function toggle_ed()
-    skip_ed = not skip_ed
-    save_settings()
-    status("ED", skip_ed)
-end
+local function toggle_op() skip_op = not skip_op; save_settings(); status("OP", skip_op) end
+local function toggle_ed() skip_ed = not skip_ed; save_settings(); status("ED", skip_ed) end
 
 ------------------------------------------------------------
--- INIT
+-- INITIALIZATION
 ------------------------------------------------------------
 load_settings()
 
-mp.register_event("file-loaded", scan)
+mp.register_event("file-loaded", fetch_aniskip_timestamps)
 mp.observe_property("time-pos", "number", check)
 mp.observe_property("pause", "bool", on_pause)
 
