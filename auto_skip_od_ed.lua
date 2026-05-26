@@ -4,14 +4,14 @@ local utils = require('mp.utils')
 local msg = require('mp.msg')
 
 ------------------------------------------------------------
--- CONFIG
+-- CONFIGURATION & STORAGE
 ------------------------------------------------------------
 local config_file = mp.command_native({"expand-path", "~~/auto_skip_settings.json"})
 local skip_op = true
 local skip_ed = true
 
 ------------------------------------------------------------
--- STATE
+-- RUNTIME STATE
 ------------------------------------------------------------
 local ranges = {}
 local ignored = {}
@@ -20,7 +20,7 @@ local pending = nil
 local time_left = 0
 
 ------------------------------------------------------------
--- SETTINGS
+-- SETTINGS MANAGEMENT
 ------------------------------------------------------------
 local function load_settings()
     local f = io.open(config_file, "r")
@@ -43,7 +43,7 @@ local function save_settings()
 end
 
 ------------------------------------------------------------
--- UTIL
+-- UTILITIES
 ------------------------------------------------------------
 local function clear_timer()
     if active_timer then
@@ -65,7 +65,7 @@ local function get_color(t)
 end
 
 ------------------------------------------------------------
--- HEURISTIC FALLBACK (Your optimized local clustering)
+-- HEURISTIC FALLBACK (Local Clustering Engine)
 ------------------------------------------------------------
 local function run_local_fallback()
     msg.info("AniSkip failed or not found. Running local chapter clustering...")
@@ -126,7 +126,7 @@ local function run_local_fallback()
 end
 
 ------------------------------------------------------------
--- ANISKIP API INTEGRATION (SEANIME OPTIMIZED)
+-- ANISKIP API INTEGRATION (MAL ID SPECIFIC)
 ------------------------------------------------------------
 local function fetch_aniskip_timestamps()
     ranges = {}
@@ -137,17 +137,17 @@ local function fetch_aniskip_timestamps()
     local duration = mp.get_property_number("duration", 0)
     if duration == 0 then return end
 
-    -- 1. Try to get exact IDs from Seanime's background data
-    local anilist_id = mp.get_property("user-data/seanime/anilist-id") or mp.get_property("user-data/seanime/mal-id")
+    -- 1. Try to get the exact MAL ID from Seanime's metadata space
+    local mal_id = mp.get_property("user-data/seanime/mal-id")
     local ep_num = mp.get_property("user-data/seanime/episode")
     local url = ""
 
-    if anilist_id and ep_num then
-        -- Fast, 100% accurate endpoint using Seanime IDs
+    if mal_id and ep_num then
+        -- Fast, 100% accurate API endpoint using MAL ID mapping
         url = string.format("https://api.aniskip.com/v2/skip-times/%s/%s?types=op&types=ed&episodeLength=%s", 
-                            tonumber(anilist_id), tonumber(ep_num), math.floor(duration))
+                            tonumber(mal_id), tonumber(ep_num), math.floor(duration))
     else
-        -- 2. Fallback: Parse filename if Seanime data is missing
+        -- 2. Fallback: Parse filename if native Seanime MAL data is unavailable
         local filename = mp.get_property("filename", "")
         ep_num = filename:match("%s%-%s(%d+)") or filename:match("EP?%s*(%d+)") or filename:match("_%s*(%d+)")
         local title_clean = filename:gsub("%[[^%]]+%]%s*", ""):match("^([^%-]+)") or ""
@@ -162,7 +162,7 @@ local function fetch_aniskip_timestamps()
         url = string.format("https://api.aniskip.com/v2/skip-times/search?title=%s&episode=%s&duration=%s", url_title, tonumber(ep_num), duration)
     end
 
-    -- Query AniSkip via background async process
+    -- Background async request targeting AniSkip database
     mp.command_native_async({
         name = "subprocess",
         capture_stdout = true,
@@ -186,7 +186,7 @@ local function fetch_aniskip_timestamps()
             if skip_type == "op" or skip_type == "ed" then
                 table.insert(ranges, {
                     start = result.interval.startTime,
-                    end_ = result.interval.endTime,
+                    end = result.interval.endTime,
                     type = skip_type
                 })
             end
@@ -195,8 +195,9 @@ local function fetch_aniskip_timestamps()
         if #ranges == 0 then run_local_fallback() end
     end)
 end
+
 ------------------------------------------------------------
--- TICK ENGINE
+-- TICK ENGINE (OSD & COUNTDOWN)
 ------------------------------------------------------------
 local function tick()
     time_left = time_left - 0.2
@@ -222,7 +223,7 @@ end
 local function check(_, pos)
     if not pos then return end
 
-    -- SAFETY NET: If counting down but user seeks OUTSIDE the OP/ED range, kill it
+    -- Abort tracking if the user actively seeks outside the targeted play zone
     if pending then
         if pos < pending.start or pos >= pending.end_ then
             clear_timer()
@@ -231,7 +232,7 @@ local function check(_, pos)
         return
     end
 
-    -- Scan ranges to initiate countdown
+    -- Track current position inside loaded ranges
     for _, r in ipairs(ranges) do
         if pos >= r.start and pos < r.end_ - 1 then
             local enabled = (r.type == "op" and skip_op) or (r.type == "ed" and skip_ed)
@@ -248,7 +249,7 @@ local function check(_, pos)
 end
 
 ------------------------------------------------------------
--- PAUSE CANCEL & TOGGLES
+-- ACTIONS & INTERRUPTS
 ------------------------------------------------------------
 local function on_pause(_, paused)
     if not paused or not pending or not active_timer then return end
@@ -277,7 +278,7 @@ local function toggle_op() skip_op = not skip_op; save_settings(); status("OP", 
 local function toggle_ed() skip_ed = not skip_ed; save_settings(); status("ED", skip_ed) end
 
 ------------------------------------------------------------
--- INITIALIZATION
+-- RUNTIME INITIALIZATION
 ------------------------------------------------------------
 load_settings()
 
