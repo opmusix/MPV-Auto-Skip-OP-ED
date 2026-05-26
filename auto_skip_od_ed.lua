@@ -65,10 +65,14 @@ local function get_color(t)
 end
 
 ------------------------------------------------------------
--- HEURISTIC FALLBACK (Local Clustering Engine)
+-- HEURISTIC CHAPTER CLUSTERING ENGINE
 ------------------------------------------------------------
-local function run_local_fallback()
-    msg.info("AniSkip failed or not found. Running local chapter clustering...")
+local function scan_chapters()
+    ranges = {}
+    ignored = {}
+    clear_timer()
+    pending = nil
+
     local count = mp.get_property_number("chapter-list/count", 0)
     local duration = mp.get_property_number("duration")
     if count == 0 or not duration then return end
@@ -76,6 +80,7 @@ local function run_local_fallback()
     local chapters = {}
     local found_op, found_ed = false, false
 
+    -- 1. Gather all chapters and durations
     for i = 0, count - 1 do
         local start = mp.get_property_number("chapter-list/" .. i .. "/time")
         local title = (mp.get_property("chapter-list/" .. i .. "/title") or ""):lower()
@@ -89,26 +94,34 @@ local function run_local_fallback()
     local best_op = {score = math.huge, chapter = nil}
     local best_ed = {score = math.huge, chapter = nil}
 
+    -- 2. Analyze and score chapters
     for _, c in ipairs(chapters) do
         local t = c.title
         local is_op = t:find("op") or t:find("opening")
         local is_ed = t:find("ed") or t:find("ending")
         local protected = t:find("intro") or t:find("prologue") or t:find("part") or t:find("scene") or t:find("pv") or t:find("preview")
 
+        -- Explicit matches bypass heuristics
         if is_op then
             table.insert(ranges, {start=c.start, end_=c.end_, type="op"})
         elseif is_ed then
             table.insert(ranges, {start=c.start, end_=c.end_, type="ed"})
+        
+        -- Heuristic candidate scoring (75-110s window)
         elseif not protected then
             local d = c.duration
             local pos_pct = c.start / duration
 
             if d >= 75 and d <= 110 then
                 local dur_penalty = math.abs(d - 90) * 2 
+                
+                -- OP Candidate (early in file)
                 if pos_pct < 0.35 then
                     local score = dur_penalty + (pos_pct * 100)
                     if score < best_op.score then best_op = {score = score, chapter = c} end
                 end
+                
+                -- ED Candidate (late in file)
                 if pos_pct > 0.65 then
                     local score = dur_penalty + (math.abs(pos_pct - 0.92) * 100)
                     if score < best_ed.score then best_ed = {score = score, chapter = c} end
@@ -117,83 +130,13 @@ local function run_local_fallback()
         end
     end
 
+    -- 3. Fallback to best heuristic candidates if explicit labels were missing
     if not found_op and best_op.chapter then
         table.insert(ranges, {start=best_op.chapter.start, end_=best_op.chapter.end_, type="op"})
     end
     if not found_ed and best_ed.chapter then
         table.insert(ranges, {start=best_ed.chapter.start, end_=best_ed.chapter.end_, type="ed"})
     end
-end
-
-------------------------------------------------------------
--- ANISKIP API INTEGRATION (MAL ID SPECIFIC)
-------------------------------------------------------------
-local function fetch_aniskip_timestamps()
-    ranges = {}
-    ignored = {}
-    clear_timer()
-    pending = nil
-
-    local duration = mp.get_property_number("duration", 0)
-    if duration == 0 then return end
-
-    -- 1. Try to get the exact MAL ID from Seanime's metadata space
-    local mal_id = mp.get_property("user-data/seanime/mal-id")
-    local ep_num = mp.get_property("user-data/seanime/episode")
-    local url = ""
-
-    if mal_id and ep_num then
-        -- Fast, 100% accurate API endpoint using MAL ID mapping
-        url = string.format("https://api.aniskip.com/v2/skip-times/%s/%s?types=op&types=ed&episodeLength=%s", 
-                            tonumber(mal_id), tonumber(ep_num), math.floor(duration))
-    else
-        -- 2. Fallback: Parse filename if native Seanime MAL data is unavailable
-        local filename = mp.get_property("filename", "")
-        ep_num = filename:match("%s%-%s(%d+)") or filename:match("EP?%s*(%d+)") or filename:match("_%s*(%d+)")
-        local title_clean = filename:gsub("%[[^%]]+%]%s*", ""):match("^([^%-]+)") or ""
-        title_clean = title_clean:gsub("^%s*(.-)%s*$", "%1")
-
-        if not ep_num or title_clean == "" then
-            run_local_fallback()
-            return
-        end
-
-        local url_title = title_clean:gsub("([^%w])", function(c) return string.format("%%%02X", string.byte(c)) end)
-        url = string.format("https://api.aniskip.com/v2/skip-times/search?title=%s&episode=%s&duration=%s", url_title, tonumber(ep_num), duration)
-    end
-
-    -- Background async request targeting AniSkip database
-    mp.command_native_async({
-        name = "subprocess",
-        capture_stdout = true,
-        playback_only = false,
-        args = {"curl", "-s", "-f", "-A", "mpv-aniskip", url}
-    }, function(success, res)
-        if not success or not res.stdout or res.stdout == "" then
-            run_local_fallback()
-            return
-        end
-
-        local parsed = utils.parse_json(res.stdout)
-        if not parsed or parsed.statusCode ~= 200 or not parsed.results then
-            run_local_fallback()
-            return
-        end
-
-        msg.info("AniSkip API successfully fetched timestamps!")
-        for _, result in ipairs(parsed.results) do
-            local skip_type = result.skipType
-            if skip_type == "op" or skip_type == "ed" then
-                table.insert(ranges, {
-                    start = result.interval.startTime,
-                    end = result.interval.endTime,
-                    type = skip_type
-                })
-            end
-        end
-
-        if #ranges == 0 then run_local_fallback() end
-    end)
 end
 
 ------------------------------------------------------------
@@ -282,7 +225,7 @@ local function toggle_ed() skip_ed = not skip_ed; save_settings(); status("ED", 
 ------------------------------------------------------------
 load_settings()
 
-mp.register_event("file-loaded", fetch_aniskip_timestamps)
+mp.register_event("playback-restart", scan_chapters)
 mp.observe_property("time-pos", "number", check)
 mp.observe_property("pause", "bool", on_pause)
 
