@@ -8,8 +8,10 @@ local msg = require('mp.msg')
 local config_file = mp.command_native({"expand-path", "~~/auto_skip_settings.json"})
 local skip_op = true
 local skip_ed = true
-local op_timer = 3.0
-local ed_timer = 5.0
+local op_timer = 5
+local ed_timer = 4
+local op_leadin = 2.0   -- seconds before OP chapter start to begin the countdown
+local ed_leadin = 1.0   -- seconds before ED chapter start
 
 ------------------------------------------------------------
 -- RUNTIME STATE
@@ -58,6 +60,8 @@ local function load_settings()
             if data.skip_ed ~= nil then skip_ed = data.skip_ed end
             if data.op_timer ~= nil then op_timer = clamp_timer(data.op_timer) end
             if data.ed_timer ~= nil then ed_timer = clamp_timer(data.ed_timer) end
+            if data.op_leadin ~= nil then op_leadin = math.max(0, tonumber(data.op_leadin) or 0) end
+            if data.ed_leadin ~= nil then ed_leadin = math.max(0, tonumber(data.ed_leadin) or 0) end
         end
     end
 end
@@ -69,7 +73,9 @@ local function save_settings()
             skip_op = skip_op, 
             skip_ed = skip_ed,
             op_timer = op_timer,
-            ed_timer = ed_timer
+            ed_timer = ed_timer,
+            op_leadin = op_leadin,
+            ed_leadin = ed_leadin
         }))
         f:close()
     end
@@ -87,16 +93,13 @@ end
 
 local function get_color(t, max_t)
     if t > 3.0 then
-        -- Smart transition from Green to Red proportional to user's custom timer
         local window = max_t - 3.0
-        if window <= 0 then window = 1 end -- Failsafe
-        local ratio = (max_t - t) / window -- 0 at start, 1 at t=3.0
-        
+        if window <= 0 then window = 1 end
+        local ratio = (max_t - t) / window
         local r = math.floor(255 * ratio)
         local g = math.floor(255 * (1 - ratio))
-        return string.format("%02X%02X%02X", 0, g, r) -- MPV ASS BGR Format
+        return string.format("%02X%02X%02X", 0, g, r)
     else
-        -- STRICTLY LOCKED 3-SECOND ALARMING COLORS (Cannot be changed)
         local blink = math.floor((mp.get_time() * 5) % 2)
         if blink == 0 then return "FFFFFF" else return "0000FF" end
     end
@@ -104,7 +107,7 @@ end
 
 local function title_matches(title, patterns)
     for _, p in ipairs(patterns) do
-        if title:find(p, 1, true) then return true end
+        if title:find("%f[%w]" .. p .. "%f[%W]") then return true end
     end
     return false
 end
@@ -266,7 +269,8 @@ local function check(_, pos)
     if not pos then return end
 
     if pending then
-        if pos < pending.start or pos >= pending.end_ then
+        -- expanded condition: stay pending until past the end
+        if pos < pending.start - (pending.type == "op" and op_leadin or ed_leadin) or pos >= pending.end_ then
             clear_timer()
             pending = nil
         end
@@ -274,7 +278,9 @@ local function check(_, pos)
     end
 
     for _, r in ipairs(ranges) do
-        if pos >= r.start and pos < r.end_ - 1 then
+        local leadin = (r.type == "op") and op_leadin or ed_leadin
+        local trigger_start = math.max(0, r.start - leadin)
+        if pos >= trigger_start and pos < r.end_ - 1 then
             local enabled = (r.type == "op" and skip_op) or (r.type == "ed" and skip_ed)
             local signature = get_range_signature(r)
 
