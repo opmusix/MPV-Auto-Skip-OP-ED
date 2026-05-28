@@ -10,8 +10,8 @@ local skip_op = true
 local skip_ed = true
 local op_timer = 5
 local ed_timer = 4
-local op_leadin = 2.0   -- seconds before OP chapter start to begin the countdown
-local ed_leadin = 1.0   -- seconds before ED chapter start
+local op_leadin = 0.0   -- seconds before OP chapter start to begin the countdown
+local ed_leadin = 0.0   -- seconds before ED chapter start
 
 ------------------------------------------------------------
 -- RUNTIME STATE
@@ -269,7 +269,6 @@ local function check(_, pos)
     if not pos then return end
 
     if pending then
-        -- expanded condition: stay pending until past the end
         if pos < pending.start - (pending.type == "op" and op_leadin or ed_leadin) or pos >= pending.end_ then
             clear_timer()
             pending = nil
@@ -279,6 +278,14 @@ local function check(_, pos)
 
     for _, r in ipairs(ranges) do
         local leadin = (r.type == "op") and op_leadin or ed_leadin
+        local timer = (r.type == "op") and op_timer or ed_timer
+
+        -- Silent fail-safe: Ensure lead-in is strictly smaller than the timer
+        -- so the countdown always resolves inside the chapter itself.
+        if leadin >= timer then
+            leadin = math.max(0, timer - 1)
+        end
+
         local trigger_start = math.max(0, r.start - leadin)
         if pos >= trigger_start and pos < r.end_ - 1 then
             local enabled = (r.type == "op" and skip_op) or (r.type == "ed" and skip_ed)
@@ -286,7 +293,7 @@ local function check(_, pos)
 
             if enabled and not session_ignored[signature] then
                 pending = r
-                pending.max_timer = (r.type == "op") and op_timer or ed_timer
+                pending.max_timer = timer
                 time_left = pending.max_timer
                 
                 tick()
@@ -312,6 +319,8 @@ local function on_pause(_, paused)
     mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&H888888&}[SKIP CANCELLED]" .. ass_end, 2)
     
     pending = nil
+    
+    -- Restored: User intentionally wants the video to immediately unpause after canceling the skip.
     mp.add_timeout(0.01, function() mp.set_property_bool("pause", false) end)
 end
 
