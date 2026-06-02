@@ -10,8 +10,8 @@ local skip_op = true
 local skip_ed = true
 local op_timer = 5
 local ed_timer = 4
-local op_leadin = 0.0   -- seconds before OP chapter start to begin the countdown
-local ed_leadin = 0.0   -- seconds before ED chapter start
+local op_leadin = 2.0   -- seconds before OP chapter start to begin the countdown
+local ed_leadin = 1.0   -- seconds before ED chapter start
 
 ------------------------------------------------------------
 -- RUNTIME STATE
@@ -310,18 +310,17 @@ end
 local function on_pause(_, paused)
     if not paused or not pending or not active_timer then return end
     clear_timer()
-    
+
     local signature = get_range_signature(pending)
     session_ignored[signature] = true
-    
+
     local ass_start = mp.get_property("osd-ass-cc/0") or ""
     local ass_end = mp.get_property("osd-ass-cc/1") or ""
     mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&H888888&}[SKIP CANCELLED]" .. ass_end, 2)
-    
+
     pending = nil
-    
-    -- Restored: User intentionally wants the video to immediately unpause after canceling the skip.
-    mp.add_timeout(0.01, function() mp.set_property_bool("pause", false) end)
+
+    mp.set_property_bool("pause", false)
 end
 
 local function status(name, val)
