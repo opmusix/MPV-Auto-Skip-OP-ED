@@ -149,7 +149,6 @@ local function scan_chapters()
     if has_strict_ed then current_protected = merge_patterns(current_protected, ambiguous_ed_patterns) end
 
     local raw_chapters = {}
-    local found_op, found_ed = false, false
 
     for i = 0, count - 1 do
         local start = mp.get_property_number("chapter-list/" .. i .. "/time")
@@ -195,30 +194,32 @@ local function scan_chapters()
         end
     end
 
-    for _, c in ipairs(chapters) do
-        if title_matches(c.title, op_patterns) then found_op = true end
-        if title_matches(c.title, ed_patterns) then found_ed = true end
-    end
-
     local best_op = {score = math.huge, chapter = nil}
     local best_ed = {score = math.huge, chapter = nil}
+    local found_op, found_ed = false, false
 
     for _, c in ipairs(chapters) do
         local t = c.title
-        local is_op = title_matches(t, op_patterns)
-        local is_ed = title_matches(t, ed_patterns)
+        local d = c.duration
+        local is_strict_op = title_matches(t, strict_op_patterns)
+        local is_strict_ed = title_matches(t, strict_ed_patterns)
+        
+        -- Enforce the ~90-second rule (75s to 110s) for ambiguous chapters like "Intro"
+        local is_op = is_strict_op or (title_matches(t, op_patterns) and d >= 75 and d <= 110)
+        local is_ed = is_strict_ed or (title_matches(t, ed_patterns) and d >= 75 and d <= 110)
         local protected = title_matches(t, current_protected)
 
         if is_op and not protected then
             table.insert(ranges, {start=c.start, end_=c.end_, type="op"})
+            found_op = true
         elseif is_ed and not protected then
             table.insert(ranges, {start=c.start, end_=c.end_, type="ed"})
+            found_ed = true
         elseif not protected then
-            local d = c.duration
-            local pos_pct = c.start / duration
-
+            -- Fallback heuristic for unnamed chapters based entirely on the 90-second rule
             if d >= 75 and d <= 110 then
                 local dur_penalty = math.exp(math.abs(d - 90) / 10) - 1
+                local pos_pct = c.start / duration
                 
                 if pos_pct < 0.35 then
                     local score = dur_penalty + ((pos_pct - 0.18)^2 / (2 * 0.08^2))
@@ -280,8 +281,6 @@ local function check(_, pos)
         local leadin = (r.type == "op") and op_leadin or ed_leadin
         local timer = (r.type == "op") and op_timer or ed_timer
 
-        -- Silent fail-safe: Ensure lead-in is strictly smaller than the timer
-        -- so the countdown always resolves inside the chapter itself.
         if leadin >= timer then
             leadin = math.max(0, timer - 1)
         end
@@ -319,7 +318,6 @@ local function on_pause(_, paused)
     mp.osd_message(ass_start .. "{\\an7\\fs12\\b1\\c&H888888&}[SKIP CANCELLED]" .. ass_end, 2)
 
     pending = nil
-
     mp.set_property_bool("pause", false)
 end
 
