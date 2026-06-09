@@ -47,5 +47,7 @@ A configuration file is generated at `~~/auto_skip_settings.json` in your main m
   "op_leadin": 2.0,
   "ed_leadin": 1.0
 }
----
+```
+
+
 *[Written by Gemini]*
