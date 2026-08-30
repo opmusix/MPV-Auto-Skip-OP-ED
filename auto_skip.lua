@@ -2,6 +2,7 @@ local mp = require('mp')
 
 ------------------------------------------------------------
 -- USER CONFIGURATION
+-- Edit these variables to customize the script's behavior.
 ------------------------------------------------------------
 local config = {
     -- Master Toggles (Default state on startup)
@@ -9,12 +10,17 @@ local config = {
     skip_ed = true,
 
     -- Behavioral Features
-    cancel_auto_resume = true,
-    allow_reskip = true,
+    cancel_auto_resume = true,  -- Pressing Space (Pause) cancels auto-skip AND instantly resumes playback.
+    allow_reskip = true,        -- Rewinding to BEFORE the OP/ED trigger point re-arms the skip.
 
     -- Timing Configurations (in seconds)
-    op_timer = 5.0,
-    ed_timer = 4.0,
+    -- NOTE: Set timer to 0.0 for Instant Teleport mode!
+    op_timer = 5.0,             -- Total countdown duration for OP
+    ed_timer = 4.0,             -- Total countdown duration for ED
+
+    -- 'leadin' defines how many seconds INSIDE the chapter the timer runs before skipping.
+    -- Example: OP starts at 00:37. Timer=5, Leadin=2. 
+    -- Timer appears at 00:34 (Green). Turns Red at 00:37. Skips at 00:39.
     op_leadin = 2.0,   
     ed_leadin = 2.0,   
 
@@ -114,7 +120,7 @@ local function trigger_manual_prompt(r)
     -- \alpha&HA0& creates low opacity (transparent) text
     mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\alpha&HA0&}Skip? Press Space" .. ass_end, 3.0)
     
-    -- Temporarily hijack the spacebar
+    -- Temporarily hijack the spacebar for manual confirmation
     mp.add_forced_key_binding("SPACE", "manual-skip-space", execute_manual_skip)
     manual_timer = mp.add_timeout(3.0, clear_manual_prompt)
 end
@@ -197,7 +203,6 @@ local function scan_chapters()
         local is_strict_op = title_matches(t, strict_op_patterns)
         local is_strict_ed = title_matches(t, strict_ed_patterns)
         
-        -- Cap non-strict matches to max_auto_duration
         local is_op = is_strict_op or (title_matches(t, op_patterns) and d >= config.heuristic_min and d <= config.max_auto_duration)
         local is_ed = is_strict_ed or (title_matches(t, ed_patterns) and d >= config.heuristic_min and d <= config.max_auto_duration)
         local protected = title_matches(t, current_protected)
@@ -312,25 +317,39 @@ local function check(_, pos)
                 end
             end
         else
-            -- Auto-skip countdown trigger
-            local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
-            local timer = (r.type == "op") and config.op_timer or config.ed_timer
+            local enabled = (r.type == "op" and config.skip_op) or (r.type == "ed" and config.skip_ed)
+            local sig = get_range_signature(r)
 
-            local pre_chapter = timer - leadin
-            local trigger_start = math.max(0, r.start - pre_chapter)
-            local skip_point = r.start + leadin
+            if enabled and not session_ignored[sig] then
+                local timer = (r.type == "op") and config.op_timer or config.ed_timer
 
-            if pos >= trigger_start and pos < skip_point then
-                local enabled = (r.type == "op" and config.skip_op) or (r.type == "ed" and config.skip_ed)
-                
-                if enabled and not session_ignored[get_range_signature(r)] then
-                    pending = r
-                    pending.trigger_start = trigger_start
-                    pending.skip_point = skip_point
-                    
-                    tick()
-                    active_timer = mp.add_periodic_timer(0.1, tick)
-                    return
+                -- ⚡ INSTANT TELEPORT MODE (If timer is set to 0 or less)
+                if timer <= 0 then
+                    if pos >= r.start and pos < r.end_ then
+                        session_ignored[sig] = true
+                        mp.set_property_number("time-pos", r.end_)
+                        
+                        local ass_start = mp.get_property("osd-ass-cc/0") or ""
+                        local ass_end = mp.get_property("osd-ass-cc/1") or ""
+                        mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\c&HFFFFFF&}✓ SKIPPED " .. r.type:upper() .. ass_end, 2)
+                        return
+                    end
+                else
+                    -- ⏱️ OSD COUNTDOWN MODE
+                    local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
+                    local pre_chapter = timer - leadin
+                    local trigger_start = math.max(0, r.start - pre_chapter)
+                    local skip_point = r.start + leadin
+
+                    if pos >= trigger_start and pos < skip_point then
+                        pending = r
+                        pending.trigger_start = trigger_start
+                        pending.skip_point = skip_point
+                        
+                        tick()
+                        active_timer = mp.add_periodic_timer(0.1, tick)
+                        return
+                    end
                 end
             end
         end
