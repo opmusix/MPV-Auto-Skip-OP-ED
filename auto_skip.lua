@@ -50,7 +50,7 @@ local strict_op_patterns = {"op", "opening", "open", "オープニング", "ncop
 local strict_ed_patterns = {"ed", "ending", "end", "エンディング", "nced", "creditless ed", "ending a", "ending 1"}
 local ambiguous_op_patterns = {"intro"}
 local ambiguous_ed_patterns = {"credits"}
-local protected_patterns = {"prologue", "part", "scene", "pv", "preview", "next episode", "recap", "ending end"}
+local protected_patterns = {"prologue", "part", "scene", "pv", "preview", "next episode", "recap", "ending end", "credits end"}
 
 local function merge_patterns(t1, t2)
     local res = {}
