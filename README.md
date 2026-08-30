@@ -1,73 +1,211 @@
 # mpv Auto Skip OP/ED
 
-A smart, feature-rich, and lightweight Lua script for [mpv](https://mpv.io/) that automatically detects and skips anime Openings (OP) and Endings (ED) using embedded chapter metadata and duration-based heuristic scoring.
+A smart and lightweight Lua script for [mpv](https://mpv.io/) that automatically detects and skips anime Openings (OP) and Endings (ED).
+
+It primarily uses embedded chapter names, with a heuristic fallback for files where the chapters are unnamed or generic. Instead of instantly skipping, it gives you a short OSD countdown so you can cancel the skip if necessary.
 
 ---
 
-## ✨ Key Features
+## ✨ Features
 
-- **Chapter Title Recognition:** Automatically matches standard anime chapter names (OP, ED, Opening, Ending, NCOP, NCED, etc.) while protecting narrative sections like *Prologue*, *Scene*, *Preview*, or *Recap*.
-- **Heuristic Fallback Engine:** For files with unnamed or generic chapters, the script uses timeline positioning and duration-penalty scoring centered around the standard 90-second anime opening/ending mark (75s–110s) to detect OP/ED sections.
-- **Visual OSD Countdown:** Shows a sleek On-Screen Display (OSD) countdown timer before skipping, featuring dynamic color switching and visual indicators.
-- **Interrupt & Cancel Actions:**
-  - **Pause to Cancel:** Pressing `Space` (Pause) during the countdown cancels the skip and automatically resumes playback immediately.
-  - **Seek to Cancel:** Seeking forward or backward during the countdown safely cancels the pending skip for that section.
-- **Smart Re-Arm (Re-skip):** If you cancel or complete a skip and rewind past the trigger threshold, the script re-arms itself so you can skip again if desired.
-- **Persistent Toggle Settings:** Master toggles (`OP` and `ED`) are saved to `~~/auto_skip_settings.json` so your preferences persist across mpv restarts.
+* **Smart Chapter Detection** — Recognizes common names such as `OP`, `Opening`, `ED`, `Ending`, `NCOP`, `NCED`, etc.
+* **Protected Chapters** — Avoids likely narrative sections such as `Prologue`, `Scene`, `Preview`, `Recap`, and others.
+* **Heuristic Fallback** — Can estimate likely OP/ED chapters from their duration and position in the video when useful chapter names are unavailable.
+* **Countdown Before Skipping** — Shows an OSD countdown before actually skipping.
+* **Easy Cancel** — Press `Space` during the countdown to cancel the skip. By default, playback resumes automatically.
+* **Seek to Cancel** — Seeking during the countdown also cancels the pending skip.
+* **Smart Re-Arm** — Rewinding far enough can make a previously handled OP/ED eligible for skipping again.
+* **Independent OP/ED Toggles** — Enable or disable OP and ED skipping separately.
+* **Single-File Configuration** — Everything you normally need to configure is in one clearly marked section at the top of the script.
 
 ---
 
 ## 📥 Installation
 
-1. Place `auto_skip.lua` into your mpv `scripts` directory:
-   - **Windows:** `%APPDATA%\mpv\scripts\`
-   - **Linux / macOS:** `~/.config/mpv/scripts/`
-2. Launch mpv with any media file. The script will initialize automatically and create its configuration file on first launch.
+Place `auto_skip.lua` in your mpv `scripts` directory.
+
+* **Windows:** `%APPDATA%\mpv\scripts\`
+* **Linux / macOS:** `~/.config/mpv/scripts/`
+
+Then start or restart mpv.
 
 ---
 
-## 🎮 Keybindings & Controls
+## 🎮 Keybindings
 
-| Keybinding | Action | Description |
-| :--- | :--- | :--- |
-| `Alt + a` | **Toggle OP Skip** | Enable or disable Opening skipping globally. |
-| `Alt + s` | **Toggle ED Skip** | Enable or disable Ending skipping globally. |
-| `Space` *(Pause)* | **Cancel & Resume** | Press during countdown to cancel skipping and resume video. |
-| *(Any Seek)* | **Cancel Skip** | Seeking during the countdown aborts the current skip. |
+| Key       | Action                            |
+| :-------- | :-------------------------------- |
+| `Alt + A` | Toggle OP skipping                |
+| `Alt + S` | Toggle ED skipping                |
+| `Space`   | Cancel the current skip countdown |
+| Seek      | Cancel the current skip countdown |
+
+`Alt + A` and `Alt + S` only change the setting for the current mpv session. They do not modify the configuration in the Lua file.
 
 ---
 
-## ⚙️ Configuration & Customization
+## ⚙️ Configuration
 
-### Settings JSON File
-The script automatically generates a lightweight JSON configuration file at `~~/auto_skip_settings.json` to store your toggle states:
+Open `auto_skip.lua` in a text editor.
 
-```json
-{
-  "skip_op": true,
-  "skip_ed": true
+**You only need to edit the `config` section at the very top of the file.**
+Everything below it is part of the script itself and normally should not be changed.
+
+```lua
+local config = {
+    -- Master Toggles
+    skip_op = true,
+    skip_ed = true,
+
+    -- Behavioral Features
+    cancel_auto_resume = true,
+    allow_reskip = true,
+
+    -- Timing Configurations (in seconds)
+    op_timer = 5.0,
+    ed_timer = 4.0,
+
+    op_leadin = 2.0,
+    ed_leadin = 2.0,
+
+    -- Heuristic Fallback Bounds (in seconds)
+    heuristic_min = 75.0,
+    heuristic_max = 110.0
 }
 ```
 
-### Script Internal Timings
-Timing variables are maintained directly inside the `auto_skip.lua` file to prevent configuration overwrites. Open `auto_skip.lua` in any text editor to adjust the following variables at the top of the file:
+### Master Toggles
 
 ```lua
--- Master behavioral settings
-local cancel_auto_resume = true  -- Pressing Space cancels skip & resumes playback
-local allow_reskip = true        -- Rewinding re-arms the skip trigger
-
--- Timing parameters (in seconds)
-local op_timer  = 5.0            -- Total countdown duration for OP
-local ed_timer  = 4.0            -- Total countdown duration for ED
-local op_leadin = 2.0            -- Seconds inside chapter before skipping OP
-local ed_leadin = 2.0            -- Seconds inside chapter before skipping ED
+skip_op = true
+skip_ed = true
 ```
+
+These control whether OP and ED skipping is **enabled by default when mpv starts**.
+
+* `true` = enabled
+* `false` = disabled
+
+You can still change them temporarily with `Alt+A` and `Alt+S`.
 
 ---
 
-## 💡 How It Works
+### `cancel_auto_resume`
 
-1. **Trigger Phase:** Before an OP/ED starts (calculated as `timer - leadin` seconds prior to chapter start), the script initiates a live countdown overlay.
-2. **Execution Phase:** At `chapter_start + leadin`, if uninterrupted, the player jumps directly to the chapter end point and confirms with a `✓ SKIPPED` OSD message.
-3. **Session Memory:** Each skipped segment is tracked during playback so it won't repeatedly trigger unless you rewind past the start line.
+```lua
+cancel_auto_resume = true
+```
+
+Controls what happens when you press `Space` during a countdown.
+
+* `true` — cancel the skip **and immediately resume playback**
+* `false` — cancel the skip and remain paused
+
+`true` is recommended if you want Space to act as a simple **"don't skip this"** button.
+
+---
+
+### `allow_reskip`
+
+```lua
+allow_reskip = true
+```
+
+Controls whether a previously handled OP/ED can be triggered again after rewinding.
+
+* `true` — rewinding before the trigger point can re-arm the skip
+* `false` — once handled, that section stays ignored for the session
+
+---
+
+## ⏱️ Countdown Settings
+
+### `op_timer` / `ed_timer`
+
+```lua
+op_timer = 5.0
+ed_timer = 4.0
+```
+
+These control the **total countdown duration** before an OP or ED is skipped.
+
+For example:
+
+```lua
+op_timer = 8.0
+```
+
+gives you a longer warning before an OP is skipped.
+
+---
+
+### `op_leadin` / `ed_leadin`
+
+```lua
+op_leadin = 2.0
+ed_leadin = 2.0
+```
+
+These control how much of the countdown continues **after the OP/ED chapter has actually started**.
+
+For example, with:
+
+```lua
+op_timer = 5.0
+op_leadin = 2.0
+```
+
+the countdown starts about **3 seconds before the OP**, continues for about **2 seconds into it**, and then skips.
+
+### Easy way to think about it
+
+```text
+Timer = how long the whole warning lasts
+Leadin = how much of that warning happens inside the OP/ED
+```
+
+So you generally only need to change these if you want the skip to happen earlier or later.
+
+---
+
+## 🔎 Heuristic Settings
+
+### `heuristic_min` / `heuristic_max`
+
+```lua
+heuristic_min = 75.0
+heuristic_max = 110.0
+```
+
+These define the chapter-duration range used when the script has to **guess** where an OP/ED is.
+
+The default range of **75–110 seconds** is intended to cover the typical ~90-second anime OP/ED.
+
+You normally should **leave these alone** unless you regularly use videos with unusually short or long OP/ED segments.
+
+A wider range may find more candidates, but can also increase the chance of a false detection.
+
+---
+
+## 💡 Recommended Configuration
+
+For most users, the defaults are a good starting point:
+
+```lua
+skip_op = true
+skip_ed = true
+
+cancel_auto_resume = true
+allow_reskip = true
+
+op_timer = 5.0
+ed_timer = 4.0
+
+op_leadin = 2.0
+ed_leadin = 2.0
+
+heuristic_min = 75.0
+heuristic_max = 110.0
+```
+
+**In most cases, you only need to change `skip_op`, `skip_ed`, or the countdown settings.** The heuristic values are best left at their defaults unless you have a specific reason to adjust them.
