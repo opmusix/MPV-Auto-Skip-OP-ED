@@ -47,7 +47,7 @@ local manual_timer = nil
 -- KEYWORD PATTERNS
 ------------------------------------------------------------
 local strict_op_patterns = {"op", "opening", "open", "オープニング", "ncop", "creditless op", "opening a", "opening 1"}
-local strict_ed_patterns = {"ed", "ending", "end", "エンディング", "nced", "creditless ed", "ending a", "ending 1"}
+local strict_ed_patterns = {"ed", "ending", "end", "エンディング", "nced", "creditless ed", "ending a", "ending 1", "credits", "credits start"}
 local ambiguous_op_patterns = {"intro"}
 local ambiguous_ed_patterns = {"credits"}
 local protected_patterns = {"prologue", "part", "scene", "pv", "preview", "next episode", "recap", "ending end", "credits end"}
