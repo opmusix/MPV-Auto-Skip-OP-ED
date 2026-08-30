@@ -1,35 +1,35 @@
 local mp = require('mp')
-local utils = require('mp.utils')
 
 ------------------------------------------------------------
--- CONFIGURATION & STORAGE
+-- USER CONFIGURATION
+-- Edit these variables to customize the script's behavior.
 ------------------------------------------------------------
-local config_file = mp.command_native({"expand-path", "~~/auto_skip_settings.json"})
+local config = {
+    -- Master Toggles (Default state on startup)
+    skip_op = true,
+    skip_ed = true,
 
--- Master Toggles (These are the ONLY things saved/loaded from JSON now)
-local skip_op = true
-local skip_ed = true
+    -- Behavioral Features
+    cancel_auto_resume = true,  -- Pressing Space (Pause) cancels the skip AND instantly resumes playback.
+    allow_reskip = true,        -- Rewinding to BEFORE the OP/ED trigger point re-arms the skip.
 
--- Behavioral Features
-local cancel_auto_resume = true  -- Pressing Space (Pause) cancels the skip AND instantly resumes playback.
-local allow_reskip = true        -- Rewinding to BEFORE the OP/ED trigger point re-arms the skip.
+    -- Timing Configurations (in seconds)
+    op_timer = 5.0,             -- Total countdown duration for OP
+    ed_timer = 4.0,             -- Total countdown duration for ED
 
--- Timing Configurations (Hardcoded here, will never be overwritten by JSON again)
-local op_timer = 5.0
-local ed_timer = 4.0
+    -- 'leadin' defines how many seconds INSIDE the chapter the timer runs before skipping.
+    -- Example: OP starts at 00:37. Timer=5, Leadin=2. 
+    -- Timer appears at 00:34 (Green). Turns Red at 00:37. Skips at 00:39.
+    op_leadin = 2.0,   
+    ed_leadin = 2.0,   
 
--- "leadin" defines how many seconds INSIDE the chapter the timer runs before skipping.
--- Example: OP starts at 00:37. Timer=5, Leadin=2. 
--- Timer appears at 00:34 (Green). Turns Red at 00:37. Skips at 00:39.
-local op_leadin = 2.0   -- <--- FIXED TO 2.0 HERE!
-local ed_leadin = 2.0   
-
--- Heuristic Fallback Bounds (for unnamed chapters)
-local heuristic_min = 75.0
-local heuristic_max = 110.0
+    -- Heuristic Fallback Bounds (for unnamed chapters)
+    heuristic_min = 75.0,
+    heuristic_max = 110.0
+}
 
 ------------------------------------------------------------
--- RUNTIME STATE
+-- RUNTIME STATE (Do not edit below this line)
 ------------------------------------------------------------
 local ranges = {}
 local session_ignored = {} 
@@ -51,35 +51,6 @@ local function merge_patterns(t1, t2)
     for _, v in ipairs(t1) do table.insert(res, v) end
     if t2 then for _, v in ipairs(t2) do table.insert(res, v) end end
     return res
-end
-
-------------------------------------------------------------
--- SETTINGS MANAGEMENT (Fixed to only handle toggles)
-------------------------------------------------------------
-local function load_settings()
-    local f = io.open(config_file, "r")
-    if f then
-        local content = f:read("*all")
-        f:close()
-        if content and content ~= "" then
-            local data = utils.parse_json(content)
-            if data then
-                if data.skip_op ~= nil then skip_op = data.skip_op end
-                if data.skip_ed ~= nil then skip_ed = data.skip_ed end
-            end
-        end
-    end
-end
-
-local function save_settings()
-    local f = io.open(config_file, "w")
-    if f then
-        f:write(utils.format_json({
-            skip_op = skip_op, 
-            skip_ed = skip_ed
-        }))
-        f:close()
-    end
 end
 
 ------------------------------------------------------------
@@ -183,8 +154,8 @@ local function scan_chapters()
         local t, d = c.title, c.duration
         local is_strict_op = title_matches(t, strict_op_patterns)
         local is_strict_ed = title_matches(t, strict_ed_patterns)
-        local is_op = is_strict_op or (title_matches(t, op_patterns) and d >= heuristic_min and d <= heuristic_max)
-        local is_ed = is_strict_ed or (title_matches(t, ed_patterns) and d >= heuristic_min and d <= heuristic_max)
+        local is_op = is_strict_op or (title_matches(t, op_patterns) and d >= config.heuristic_min and d <= config.heuristic_max)
+        local is_ed = is_strict_ed or (title_matches(t, ed_patterns) and d >= config.heuristic_min and d <= config.heuristic_max)
         local protected = title_matches(t, current_protected)
 
         if is_op and not protected then
@@ -192,7 +163,7 @@ local function scan_chapters()
         elseif is_ed and not protected then
             table.insert(ranges, {start=c.start, end_=c.end_, type="ed"}); found_ed = true
         elseif not protected then
-            if d >= heuristic_min and d <= heuristic_max then
+            if d >= config.heuristic_min and d <= config.heuristic_max then
                 local dur_penalty = math.exp(math.abs(d - 90) / 10) - 1
                 local pos_pct = c.start / duration
                 if pos_pct < 0.35 then
@@ -217,13 +188,12 @@ end
 local function tick()
     if not pending then return end
 
-    local is_enabled = (pending.type == "op" and skip_op) or (pending.type == "ed" and skip_ed)
+    local is_enabled = (pending.type == "op" and config.skip_op) or (pending.type == "ed" and config.skip_ed)
     if not is_enabled then
         clear_timer(); pending = nil; return
     end
 
     local pos = mp.get_property_number("time-pos", 0)
-    -- Calculate precise time left to the absolute skip point
     local time_left = pending.skip_point - pos
     local ass_start = mp.get_property("osd-ass-cc/0") or ""
     local ass_end = mp.get_property("osd-ass-cc/1") or ""
@@ -239,8 +209,6 @@ local function tick()
         return
     end
 
-    -- Flawless Dynamic Color System based on your math:
-    -- If we crossed the Chapter Start line, start flashing. If we haven't, stay calm Green.
     local color = pos >= pending.start and (math.floor((mp.get_time() * 5) % 2) == 0 and "0000FF" or "FFFFFF") or "00FF00"
     
     mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\c&HFFFFFF&}Skipping in {\\c&H" .. color .. "&}" .. math.ceil(time_left) .. ass_end, 0.25)
@@ -252,13 +220,12 @@ end
 local function check(_, pos)
     if not pos then return end
 
-    -- Smart Re-skip feature: Only re-arms if you explicitly rewind BEFORE the trigger start line.
-    if allow_reskip then
+    if config.allow_reskip then
         for _, r in ipairs(ranges) do
             local sig = get_range_signature(r)
             if session_ignored[sig] then
-                local timer = (r.type == "op") and op_timer or ed_timer
-                local leadin = (r.type == "op") and op_leadin or ed_leadin
+                local timer = (r.type == "op") and config.op_timer or config.ed_timer
+                local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
                 local pre_chapter = timer - leadin
                 local trigger_start = math.max(0, r.start - pre_chapter)
                 
@@ -270,7 +237,6 @@ local function check(_, pos)
     end
 
     if pending then
-        -- Failsafe: if we naturally bypass it without skipping, clear it.
         if pos >= pending.end_ then
             clear_timer(); pending = nil
         end
@@ -278,16 +244,15 @@ local function check(_, pos)
     end
 
     for _, r in ipairs(ranges) do
-        local leadin = (r.type == "op") and op_leadin or ed_leadin
-        local timer = (r.type == "op") and op_timer or ed_timer
+        local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
+        local timer = (r.type == "op") and config.op_timer or config.ed_timer
 
-        -- Pre-chapter evaluates how many seconds BEFORE chapter to show the timer
         local pre_chapter = timer - leadin
         local trigger_start = math.max(0, r.start - pre_chapter)
         local skip_point = r.start + leadin
 
         if pos >= trigger_start and pos < skip_point then
-            local enabled = (r.type == "op" and skip_op) or (r.type == "ed" and skip_ed)
+            local enabled = (r.type == "op" and config.skip_op) or (r.type == "ed" and config.skip_ed)
             
             if enabled and not session_ignored[get_range_signature(r)] then
                 pending = r
@@ -308,7 +273,6 @@ end
 local function on_seek()
     if not pending or not active_timer then return end
     
-    -- Native Seek cancellation
     clear_timer()
     local signature = get_range_signature(pending)
     session_ignored[signature] = true
@@ -331,7 +295,7 @@ local function on_pause(_, paused)
     mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\c&H888888&}[SKIP CANCELED]" .. ass_end, 2)
     pending = nil
     
-    if cancel_auto_resume then
+    if config.cancel_auto_resume then
         mp.set_property_bool("pause", false)
     end
 end
@@ -346,14 +310,12 @@ local function status(name, val)
     end
 end
 
-local function toggle_op() skip_op = not skip_op; save_settings(); status("OP", skip_op) end
-local function toggle_ed() skip_ed = not skip_ed; save_settings(); status("ED", skip_ed) end
+local function toggle_op() config.skip_op = not config.skip_op; status("OP", config.skip_op) end
+local function toggle_ed() config.skip_ed = not config.skip_ed; status("ED", config.skip_ed) end
 
 ------------------------------------------------------------
 -- RUNTIME INITIALIZATION
 ------------------------------------------------------------
-load_settings()
-
 mp.register_event("playback-restart", scan_chapters)
 mp.observe_property("time-pos", "number", check)
 mp.observe_property("pause", "bool", on_pause)
