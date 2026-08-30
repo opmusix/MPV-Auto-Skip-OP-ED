@@ -2,7 +2,6 @@ local mp = require('mp')
 
 ------------------------------------------------------------
 -- USER CONFIGURATION
--- Edit these variables to customize the script's behavior.
 ------------------------------------------------------------
 local config = {
     -- Master Toggles (Default state on startup)
@@ -10,22 +9,19 @@ local config = {
     skip_ed = true,
 
     -- Behavioral Features
-    cancel_auto_resume = true,  -- Pressing Space (Pause) cancels the skip AND instantly resumes playback.
-    allow_reskip = true,        -- Rewinding to BEFORE the OP/ED trigger point re-arms the skip.
+    cancel_auto_resume = true,
+    allow_reskip = true,
 
     -- Timing Configurations (in seconds)
-    op_timer = 5.0,             -- Total countdown duration for OP
-    ed_timer = 4.0,             -- Total countdown duration for ED
-
-    -- 'leadin' defines how many seconds INSIDE the chapter the timer runs before skipping.
-    -- Example: OP starts at 00:37. Timer=5, Leadin=2. 
-    -- Timer appears at 00:34 (Green). Turns Red at 00:37. Skips at 00:39.
+    op_timer = 5.0,
+    ed_timer = 4.0,
     op_leadin = 2.0,   
     ed_leadin = 2.0,   
 
-    -- Heuristic Fallback Bounds (for unnamed chapters)
+    -- Duration Limits
+    max_auto_duration = 91.0,   -- MAXIMUM duration for auto-skip. Longer keyword chapters trigger manual prompt.
     heuristic_min = 75.0,
-    heuristic_max = 110.0
+    heuristic_max = 91.0        -- Synced with max_auto_duration
 }
 
 ------------------------------------------------------------
@@ -36,6 +32,10 @@ local session_ignored = {}
 local active_timer = nil
 local pending = nil
 local current_file_path = nil
+
+-- Manual Prompt State
+local manual_pending = nil
+local manual_timer = nil
 
 ------------------------------------------------------------
 -- KEYWORD PATTERNS
@@ -79,6 +79,47 @@ local function title_matches(title, patterns)
 end
 
 ------------------------------------------------------------
+-- MANUAL PROMPT ENGINE
+------------------------------------------------------------
+local function clear_manual_prompt()
+    if manual_timer then 
+        manual_timer:kill()
+        manual_timer = nil 
+    end
+    if manual_pending then
+        mp.remove_key_binding("manual-skip-space")
+        manual_pending = nil
+        mp.osd_message("") 
+    end
+end
+
+local function execute_manual_skip()
+    if not manual_pending then return end
+    local r = manual_pending
+    clear_manual_prompt()
+    
+    local type_name = r.type:gsub("manual_", ""):upper()
+    local ass_start = mp.get_property("osd-ass-cc/0") or ""
+    local ass_end = mp.get_property("osd-ass-cc/1") or ""
+    
+    mp.set_property_number("time-pos", r.end_)
+    mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\c&HFFFFFF&}✓ SKIPPED LONG " .. type_name .. ass_end, 2)
+end
+
+local function trigger_manual_prompt(r)
+    manual_pending = r
+    local ass_start = mp.get_property("osd-ass-cc/0") or ""
+    local ass_end = mp.get_property("osd-ass-cc/1") or ""
+    
+    -- \alpha&HA0& creates low opacity (transparent) text
+    mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\alpha&HA0&}Skip? Press Space" .. ass_end, 3.0)
+    
+    -- Temporarily hijack the spacebar
+    mp.add_forced_key_binding("SPACE", "manual-skip-space", execute_manual_skip)
+    manual_timer = mp.add_timeout(3.0, clear_manual_prompt)
+end
+
+------------------------------------------------------------
 -- HEURISTIC CHAPTER CLUSTERING ENGINE
 ------------------------------------------------------------
 local function scan_chapters()
@@ -89,6 +130,7 @@ local function scan_chapters()
     ranges = {}
     session_ignored = {} 
     clear_timer()
+    clear_manual_prompt()
     pending = nil
 
     local chapters_native = mp.get_property_native("chapter-list")
@@ -154,16 +196,26 @@ local function scan_chapters()
         local t, d = c.title, c.duration
         local is_strict_op = title_matches(t, strict_op_patterns)
         local is_strict_ed = title_matches(t, strict_ed_patterns)
-        local is_op = is_strict_op or (title_matches(t, op_patterns) and d >= config.heuristic_min and d <= config.heuristic_max)
-        local is_ed = is_strict_ed or (title_matches(t, ed_patterns) and d >= config.heuristic_min and d <= config.heuristic_max)
+        
+        -- Cap non-strict matches to max_auto_duration
+        local is_op = is_strict_op or (title_matches(t, op_patterns) and d >= config.heuristic_min and d <= config.max_auto_duration)
+        local is_ed = is_strict_ed or (title_matches(t, ed_patterns) and d >= config.heuristic_min and d <= config.max_auto_duration)
         local protected = title_matches(t, current_protected)
 
         if is_op and not protected then
-            table.insert(ranges, {start=c.start, end_=c.end_, type="op"}); found_op = true
+            if d > config.max_auto_duration then
+                table.insert(ranges, {start=c.start, end_=c.end_, type="manual_op"})
+            else
+                table.insert(ranges, {start=c.start, end_=c.end_, type="op"}); found_op = true
+            end
         elseif is_ed and not protected then
-            table.insert(ranges, {start=c.start, end_=c.end_, type="ed"}); found_ed = true
+            if d > config.max_auto_duration then
+                table.insert(ranges, {start=c.start, end_=c.end_, type="manual_ed"})
+            else
+                table.insert(ranges, {start=c.start, end_=c.end_, type="ed"}); found_ed = true
+            end
         elseif not protected then
-            if d >= config.heuristic_min and d <= config.heuristic_max then
+            if d >= config.heuristic_min and d <= config.max_auto_duration then
                 local dur_penalty = math.exp(math.abs(d - 90) / 10) - 1
                 local pos_pct = c.start / duration
                 if pos_pct < 0.35 then
@@ -224,13 +276,17 @@ local function check(_, pos)
         for _, r in ipairs(ranges) do
             local sig = get_range_signature(r)
             if session_ignored[sig] then
-                local timer = (r.type == "op") and config.op_timer or config.ed_timer
-                local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
-                local pre_chapter = timer - leadin
-                local trigger_start = math.max(0, r.start - pre_chapter)
-                
-                if pos < trigger_start - 0.5 then
-                    session_ignored[sig] = nil
+                if r.type == "manual_op" or r.type == "manual_ed" then
+                    if pos < r.start - 0.5 then session_ignored[sig] = nil end
+                else
+                    local timer = (r.type == "op") and config.op_timer or config.ed_timer
+                    local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
+                    local pre_chapter = timer - leadin
+                    local trigger_start = math.max(0, r.start - pre_chapter)
+                    
+                    if pos < trigger_start - 0.5 then
+                        session_ignored[sig] = nil
+                    end
                 end
             end
         end
@@ -244,24 +300,38 @@ local function check(_, pos)
     end
 
     for _, r in ipairs(ranges) do
-        local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
-        local timer = (r.type == "op") and config.op_timer or config.ed_timer
-
-        local pre_chapter = timer - leadin
-        local trigger_start = math.max(0, r.start - pre_chapter)
-        local skip_point = r.start + leadin
-
-        if pos >= trigger_start and pos < skip_point then
-            local enabled = (r.type == "op" and config.skip_op) or (r.type == "ed" and config.skip_ed)
-            
-            if enabled and not session_ignored[get_range_signature(r)] then
-                pending = r
-                pending.trigger_start = trigger_start
-                pending.skip_point = skip_point
+        if r.type == "manual_op" or r.type == "manual_ed" then
+            -- Trigger manual prompt exactly as the chapter starts
+            if pos >= r.start and pos < r.start + 0.5 then
+                local enabled = (r.type == "manual_op" and config.skip_op) or (r.type == "manual_ed" and config.skip_ed)
+                local sig = get_range_signature(r)
                 
-                tick()
-                active_timer = mp.add_periodic_timer(0.1, tick)
-                return
+                if enabled and not session_ignored[sig] and not manual_pending then
+                    session_ignored[sig] = true
+                    trigger_manual_prompt(r)
+                end
+            end
+        else
+            -- Auto-skip countdown trigger
+            local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
+            local timer = (r.type == "op") and config.op_timer or config.ed_timer
+
+            local pre_chapter = timer - leadin
+            local trigger_start = math.max(0, r.start - pre_chapter)
+            local skip_point = r.start + leadin
+
+            if pos >= trigger_start and pos < skip_point then
+                local enabled = (r.type == "op" and config.skip_op) or (r.type == "ed" and config.skip_ed)
+                
+                if enabled and not session_ignored[get_range_signature(r)] then
+                    pending = r
+                    pending.trigger_start = trigger_start
+                    pending.skip_point = skip_point
+                    
+                    tick()
+                    active_timer = mp.add_periodic_timer(0.1, tick)
+                    return
+                end
             end
         end
     end
@@ -271,6 +341,8 @@ end
 -- ACTIONS & INTERRUPTS
 ------------------------------------------------------------
 local function on_seek()
+    if manual_pending then clear_manual_prompt() end
+
     if not pending or not active_timer then return end
     
     clear_timer()
@@ -284,6 +356,8 @@ local function on_seek()
 end
 
 local function on_pause(_, paused)
+    if paused and manual_pending then clear_manual_prompt() end
+
     if not paused or not pending or not active_timer then return end
     clear_timer()
 
