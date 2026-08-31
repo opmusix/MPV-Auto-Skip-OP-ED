@@ -49,7 +49,7 @@ local manual_timer = nil
 local strict_op_patterns = {"op", "opening", "open", "オープニング", "ncop", "creditless op", "opening a", "opening 1"}
 local strict_ed_patterns = {"ed", "ending", "end", "エンディング", "nced", "creditless ed", "ending a", "ending 1", "credits", "credits start"}
 local ambiguous_op_patterns = {"intro"}
-local ambiguous_ed_patterns = {"credits"}
+local ambiguous_ed_patterns = {}
 local protected_patterns = {"prologue", "part", "scene", "pv", "preview", "next episode", "recap", "ending end", "credits end"}
 
 local function merge_patterns(t1, t2)
