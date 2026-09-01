@@ -2,36 +2,30 @@ local mp = require('mp')
 
 ------------------------------------------------------------
 -- USER CONFIGURATION
--- Edit these variables to customize the script's behavior.
 ------------------------------------------------------------
 local config = {
-    -- Master Toggles (Default state on startup)
+    -- Master Toggles
     skip_op = true,
     skip_ed = true,
 
     -- Behavioral Features
-    cancel_auto_resume = true,  -- Pressing Space (Pause) cancels auto-skip AND instantly resumes playback.
-    allow_reskip = true,        -- Rewinding to BEFORE the OP/ED trigger point re-arms the skip.
+    cancel_auto_resume = true,  -- Pressing Space cancels auto-skip & resumes playback
+    allow_reskip = true,        -- Rewinding before trigger re-arms skip
 
     -- Timing Configurations (in seconds)
-    -- NOTE: Set timer to 0.0 for Instant Teleport mode!
-    op_timer = 5.0,             -- Total countdown duration for OP
-    ed_timer = 4.0,             -- Total countdown duration for ED
+    op_timer = 5.0,             -- Set to 0.0 for Instant Teleport mode
+    ed_timer = 4.0,             
 
-    -- 'leadin' defines how many seconds INSIDE the chapter the timer runs before skipping.
-    -- Example: OP starts at 00:37. Timer=5, Leadin=2. 
-    -- Timer appears at 00:34 (Green). Turns Red at 00:37. Skips at 00:39.
     op_leadin = 2.0,   
     ed_leadin = 2.0,   
 
-    -- Duration Limits
-    max_auto_duration = 91.0,   -- MAXIMUM duration for auto-skip. Longer keyword chapters trigger manual prompt.
-    heuristic_min = 75.0,
-    heuristic_max = 91.0        -- Synced with max_auto_duration
+    -- Duration Limits (in seconds)
+    max_duration = 91.0,        -- Maximum duration for auto-skip; longer chapters trigger manual prompt
+    heuristic_min = 75.0        -- Minimum duration for fallback keyword-less detection
 }
 
 ------------------------------------------------------------
--- RUNTIME STATE (Do not edit below this line)
+-- RUNTIME STATE
 ------------------------------------------------------------
 local ranges = {}
 local session_ignored = {} 
@@ -39,7 +33,6 @@ local active_timer = nil
 local pending = nil
 local current_file_path = nil
 
--- Manual Prompt State
 local manual_pending = nil
 local manual_timer = nil
 
@@ -50,7 +43,7 @@ local strict_op_patterns = {"op", "opening", "open", "オープニング", "ncop
 local strict_ed_patterns = {"ed", "ending", "end", "エンディング", "nced", "creditless ed", "ending a", "ending 1", "credits", "credits start"}
 local ambiguous_op_patterns = {"intro"}
 local ambiguous_ed_patterns = {}
-local protected_patterns = {"prologue", "part", "scene", "pv", "preview", "next episode", "recap", "ending end", "credits end"}
+local protected_patterns = {"prologue", "part", "scene", "pv", "preview", "next episode", "recap", "ending end", "credits end", "post-credits", "post credits"}
 
 local function merge_patterns(t1, t2)
     local res = {}
@@ -76,7 +69,8 @@ end
 local function title_matches(title, patterns)
     for _, p in ipairs(patterns) do
         if p:match("^[a-z0-9 %-]+$") then
-            if title:find("%f[%w]" .. p .. "%f[%W]") then return true end
+            local escaped_p = p:gsub("%-", "%%-")
+            if title:find("%f[%w]" .. escaped_p .. "%f[%W]") then return true end
         else
             if title:find(p, 1, true) then return true end
         end
@@ -117,10 +111,8 @@ local function trigger_manual_prompt(r)
     local ass_start = mp.get_property("osd-ass-cc/0") or ""
     local ass_end = mp.get_property("osd-ass-cc/1") or ""
     
-    -- \alpha&HA0& creates low opacity (transparent) text
     mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\alpha&HA0&}Skip? Press Space" .. ass_end, 3.0)
     
-    -- Temporarily hijack the spacebar for manual confirmation
     mp.add_forced_key_binding("SPACE", "manual-skip-space", execute_manual_skip)
     manual_timer = mp.add_timeout(3.0, clear_manual_prompt)
 end
@@ -200,27 +192,24 @@ local function scan_chapters()
 
     for _, c in ipairs(chapters) do
         local t, d = c.title, c.duration
-        local is_strict_op = title_matches(t, strict_op_patterns)
-        local is_strict_ed = title_matches(t, strict_ed_patterns)
-        
-        local is_op = is_strict_op or (title_matches(t, op_patterns) and d >= config.heuristic_min and d <= config.max_auto_duration)
-        local is_ed = is_strict_ed or (title_matches(t, ed_patterns) and d >= config.heuristic_min and d <= config.max_auto_duration)
+        local is_op = title_matches(t, op_patterns)
+        local is_ed = title_matches(t, ed_patterns)
         local protected = title_matches(t, current_protected)
 
         if is_op and not protected then
-            if d > config.max_auto_duration then
+            if d > config.max_duration then
                 table.insert(ranges, {start=c.start, end_=c.end_, type="manual_op"})
             else
                 table.insert(ranges, {start=c.start, end_=c.end_, type="op"}); found_op = true
             end
         elseif is_ed and not protected then
-            if d > config.max_auto_duration then
+            if d > config.max_duration then
                 table.insert(ranges, {start=c.start, end_=c.end_, type="manual_ed"})
             else
                 table.insert(ranges, {start=c.start, end_=c.end_, type="ed"}); found_ed = true
             end
         elseif not protected then
-            if d >= config.heuristic_min and d <= config.max_auto_duration then
+            if d >= config.heuristic_min and d <= config.max_duration then
                 local dur_penalty = math.exp(math.abs(d - 90) / 10) - 1
                 local pos_pct = c.start / duration
                 if pos_pct < 0.35 then
@@ -240,7 +229,7 @@ local function scan_chapters()
 end
 
 ------------------------------------------------------------
--- TICK ENGINE (OSD & COUNTDOWN)
+-- TICK ENGINE
 ------------------------------------------------------------
 local function tick()
     if not pending then return end
@@ -306,8 +295,7 @@ local function check(_, pos)
 
     for _, r in ipairs(ranges) do
         if r.type == "manual_op" or r.type == "manual_ed" then
-            -- Trigger manual prompt exactly as the chapter starts
-            if pos >= r.start and pos < r.start + 0.5 then
+            if pos >= r.start and pos < r.end_ then
                 local enabled = (r.type == "manual_op" and config.skip_op) or (r.type == "manual_ed" and config.skip_ed)
                 local sig = get_range_signature(r)
                 
@@ -323,7 +311,6 @@ local function check(_, pos)
             if enabled and not session_ignored[sig] then
                 local timer = (r.type == "op") and config.op_timer or config.ed_timer
 
-                -- ⚡ INSTANT TELEPORT MODE (If timer is set to 0 or less)
                 if timer <= 0 then
                     if pos >= r.start and pos < r.end_ then
                         session_ignored[sig] = true
@@ -335,7 +322,6 @@ local function check(_, pos)
                         return
                     end
                 else
-                    -- ⏱️ OSD COUNTDOWN MODE
                     local leadin = (r.type == "op") and config.op_leadin or config.ed_leadin
                     local pre_chapter = timer - leadin
                     local trigger_start = math.max(0, r.start - pre_chapter)
