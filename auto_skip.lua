@@ -15,9 +15,9 @@ local config = {
     -- Timing Configurations (in seconds)
     op_timer = 5.0,             -- Set to 0.0 for Instant Teleport mode
     ed_timer = 4.0,             
-
     op_leadin = 2.0,   
     ed_leadin = 2.0,   
+    manual_prompt_timer = 5.0,  -- Duration for the "Skip? Press Space" prompt
 
     -- Duration Limits (in seconds)
     max_duration = 91.0,        -- Maximum duration for auto-skip; longer chapters trigger manual prompt
@@ -63,7 +63,7 @@ local function clear_timer()
 end
 
 local function get_range_signature(r)
-    return string.format("%s_%.2f_%.2f", r.type, r.start, r.end_)
+    return string.format("%s_%.3f_%.3f", r.type, r.start, r.end_)
 end
 
 local function title_matches(title, patterns)
@@ -111,10 +111,10 @@ local function trigger_manual_prompt(r)
     local ass_start = mp.get_property("osd-ass-cc/0") or ""
     local ass_end = mp.get_property("osd-ass-cc/1") or ""
     
-    mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\alpha&HA0&}Skip? Press Space" .. ass_end, 3.0)
+    mp.osd_message(ass_start .. "{\\an7\\pos(3,3)\\fs8\\b1\\alpha&HA0&}Skip? Press Space" .. ass_end, config.manual_prompt_timer)
     
     mp.add_forced_key_binding("SPACE", "manual-skip-space", execute_manual_skip)
-    manual_timer = mp.add_timeout(3.0, clear_manual_prompt)
+    manual_timer = mp.add_timeout(config.manual_prompt_timer, clear_manual_prompt)
 end
 
 ------------------------------------------------------------
