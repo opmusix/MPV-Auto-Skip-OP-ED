@@ -155,7 +155,7 @@ Recognized OP/ED chapters within the internal standard duration limit are automa
 For example:
 
 ```text
-Opening — 89 seconds
+Opening — 90 seconds
 ```
 
 is treated as a normal OP and can be automatically skipped.
