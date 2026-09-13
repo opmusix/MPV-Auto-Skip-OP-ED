@@ -7,7 +7,7 @@ local config = {
     skip_ed = true,
 
     -- Behavioral Features
-    instant_skip = "off",       -- "off", "op", "ed", "both". Alt+d cycles off -> op -> ed -> both -> off.
+    instant_skip = "off",   -- "off", "op", "ed", "both". Alt+d cycles off -> op -> ed -> both -> off.
     long_skip = false,          -- Ctrl+d toggles auto-skipping recognized long OP/ED chapters up to max_duration.
     cancel_auto_resume = true,  -- Pressing Space cancels auto-skip & resumes playback
     allow_reskip = true,        -- Rewinding before trigger re-arms skip
@@ -815,10 +815,10 @@ local function toggle_ed()
 end
 
 local function cycle_instant_skip()
-    local states = { "off", "op", "ed", "both" }
+    local states = { "off", "both", "op", "ed" }
     local current = type(config.instant_skip) == "string" and config.instant_skip:lower() or "off"
-
     local next_idx = 1
+
     for i, v in ipairs(states) do
         if v == current then
             next_idx = (i % #states) + 1
@@ -847,7 +847,7 @@ local function cycle_instant_skip()
         end
     end
 
-	local val_upper = config.instant_skip:upper()
+    local val_upper = config.instant_skip:upper()
     local value_color = config.instant_skip == "off" and ASS_GRAY or ASS_AQUA
 
     local text = OSD_PREFIX
