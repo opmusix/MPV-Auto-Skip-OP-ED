@@ -1,5 +1,3 @@
-***
-
 # 🎬 mpv Auto Skip OP/ED
 
 A smart, lightweight, and highly customizable Lua script for [mpv](https://mpv.io/) that automatically detects and skips anime Openings (OP) and Endings (ED).
@@ -10,46 +8,114 @@ Unlike basic chapter-skipping scripts, **Auto Skip OP/ED** features intelligent 
 
 ## ✨ Key Features
 
-*   **🧠 Smart Chapter Clustering:** Automatically merges consecutive or split chapters (e.g., `Opening 1` and `Opening 2`) into a single continuous skip range.
-*   **🛡️ Context-Aware Protection:** Recognizes standard OP/ED tags while actively ignoring narrative sections like `Prologue`, `Recap`, `Preview`, `Scene`, and `Post-Credits`.
-*   **🔮 Heuristic Fallback:** No chapter names? No problem. The script uses timeline positioning and duration scoring to accurately guess where the OP/ED is located.
-*   **⚡ Instant Teleport Mode:** Skip the millisecond the OP/ED starts, or keep a smooth countdown—configurable independently for OP and ED.
-*   **📏 Dynamic Long Skip:** Handle unusually long openings/endings on the fly. Adjust your maximum skip threshold in real-time without restarting mpv.
-*   **🔄 Smart Re-Arming:** Rewind past a skipped section, and the script will intelligently "re-arm" it so you can watch it again.
-*   **🎛️ Live OSD Controls:** Toggle modes and adjust timers via keyboard shortcuts with beautiful on-screen feedback.
+* 🧠 **Smart Chapter Clustering:** Automatically merges consecutive or split chapters (e.g. `Opening 1` and `Opening 2`) into a single continuous skip range.
+* 🛡️ **Context-Aware Protection:** Recognizes standard OP/ED tags while actively ignoring narrative sections such as `Prologue`, `Recap`, `Preview`, `Scene`, and `Post-Credits`.
+* 🔮 **Heuristic Fallback:** No chapter names? No problem. The script analyzes chapter duration and timeline position to estimate where the OP/ED is located.
+* ⚡ **Instant Teleport Mode:** Skip the millisecond the OP/ED starts, or use a smooth countdown. OP and ED behavior can be configured independently.
+* 📏 **Dynamic Long Skip:** Handle unusually long openings/endings on the fly. Adjust the maximum allowed duration without restarting mpv.
+* 🔄 **Smart Re-Arming:** Rewind before a skipped section and the script can intelligently re-arm it so you can watch it again.
+* 🎛️ **Live OSD Controls:** Toggle features and adjust thresholds directly from mpv using keyboard shortcuts.
 
 ---
 
-## 📥 Installation
+# 📥 Installation
 
-1. Download `auto_skip.lua`.
-2. Place it in your mpv `scripts` directory:
-   * **Windows:** `%APPDATA%\mpv\scripts\`
-   * **Linux / macOS:** `~/.config/mpv/scripts/`
-3. Start or restart mpv. The script will load automatically.
+### 1. Install the script
+
+Download `auto_skip.lua` and place it in your mpv `scripts` directory.
+
+**Windows:**
+
+```text
+%APPDATA%\mpv\scripts\
+```
+
+**Linux / macOS:**
+
+```text
+~/.config/mpv/scripts/
+```
+
+Your resulting structure should look something like:
+
+```text
+mpv/
+└── scripts/
+    └── auto_skip.lua
+```
+
+Restart mpv after installing the script.
 
 ---
 
-## 🎮 Controls & Keybindings
+# ⌨️ Keybindings
 
-The script includes several hotkeys to manage behavior on the fly without editing the config file.
+> **Important:** The keybindings are not automatically registered by the Lua script.
+>
+> To use the session-wide controls, you must add the corresponding `script-binding` entries to your mpv `input.conf`.
 
-| Keybinding | Action |
-| :--- | :--- |
-| **`Alt` + `A`** | Toggle OP skipping ON/OFF |
-| **`Alt` + `S`** | Toggle ED skipping ON/OFF |
-| **`Alt` + `D`** | Cycle **Instant Skip** modes (`Off` ➔ `OP` ➔ `ED` ➔ `Both`) |
-| **`Ctrl` + `D`** | Toggle **Long Skip** (Auto-skip recognized long chapters) |
-| **`Ctrl` + `Right`** | Increase `max_duration` threshold by 0.5s |
-| **`Ctrl` + `Left`** | Decrease `max_duration` threshold by 0.5s |
-| **`Space`** | Cancel an automatic countdown **OR** confirm a manual long-skip prompt |
-| **`Seek`** | Automatically cancels any pending skip countdown |
+## Add to `input.conf`
+
+**Windows:**
+
+```text
+%APPDATA%\mpv\input.conf
+```
+
+**Linux / macOS:**
+
+```text
+~/.config/mpv/input.conf
+```
+
+Add:
+
+```text
+# AUTO SKIP KEYBINDS
+ALT+a        script-binding auto_skip/toggle-op
+ALT+s        script-binding auto_skip/toggle-ed
+ALT+d        script-binding auto_skip/cycle-instant
+CTRL+d       script-binding auto_skip/toggle-long-skip
+CTRL+RIGHT   repeatable script-binding auto_skip/max-duration-increase
+CTRL+LEFT    repeatable script-binding auto_skip/max-duration-decrease
+```
+
+Restart mpv after changing `input.conf`.
+
+## Available Controls
+
+| Keybinding       | Action                                                              |
+| ---------------- | ------------------------------------------------------------------- |
+| **Alt + A**      | Toggle OP skipping ON/OFF                                           |
+| **Alt + S**      | Toggle ED skipping ON/OFF                                           |
+| **Alt + D**      | Cycle Instant Skip mode: `Off → OP → ED → Both`                     |
+| **Ctrl + D**     | Toggle Long Skip                                                    |
+| **Ctrl + Right** | Increase `max_duration` by 0.5 seconds                              |
+| **Ctrl + Left**  | Decrease `max_duration` by 0.5 seconds                              |
+| **Space**        | Cancel an automatic countdown, or confirm a manual long-skip prompt |
+| **Seek**         | Automatically cancel any pending skip countdown                     |
+
+### Why is `input.conf` required?
+
+`auto_skip.lua` exposes its controls as mpv **script bindings**. The Lua script can define what those bindings do, but mpv still needs to know which keys should trigger them.
+
+For example:
+
+```text
+ALT+a script-binding auto_skip/toggle-op
+```
+
+means:
+
+> When `Alt+A` is pressed, call the `toggle-op` function from `auto_skip.lua`.
+
+Without these `input.conf` entries, the script can still perform its automatic OP/ED detection and skipping, but the **keyboard controls will not be available**.
 
 ---
 
-## ⚙️ Configuration
+# ⚙️ Configuration
 
-All user settings are located in the `config` table at the very top of `auto_skip.lua`. Open the file in any text editor to customize your experience.
+All user-configurable settings are located in the `config` table near the top of `auto_skip.lua`.
 
 ```lua
 local config = {
@@ -64,69 +130,441 @@ local config = {
     allow_reskip = true,          -- Rewinding before trigger re-arms skip
 
     -- Timing Configurations (in seconds)
-    op_timer = 5.0,               -- Countdown for OP (Set to 0.0 for Instant Teleport)
+    op_timer = 5.0,               -- Countdown for OP
     ed_timer = 4.0,               -- Countdown for ED
-    op_leadin = 2.0,              -- Countdown time occurring *inside* the OP
-    ed_leadin = 2.0,              -- Countdown time occurring *inside* the ED
+    op_leadin = 2.0,              -- Countdown time occurring inside the OP
+    ed_leadin = 2.0,              -- Countdown time occurring inside the ED
     manual_prompt_timer = 5.0,    -- Duration for the "Skip? Press Space" prompt
 
     -- Thresholds
-    max_duration = 100.0,         -- Max duration for "Long Skip" (Adjustable via Ctrl+Arrows)
-    heuristic_min = 75.0          -- Minimum duration for fallback keyword-less detection
+    max_duration = 100.0,          -- Max duration for "Long Skip"
+    heuristic_min = 75.0           -- Minimum duration for heuristic detection
 }
 ```
 
-### 🧠 Understanding Standard vs. Long Skips
-To prevent accidental skips of long narrative scenes that happen to be named "Opening", the script uses a two-tier system:
+---
 
-1.  **Standard Auto-Skip (≤ ~91s):** Any recognized OP/ED under the internal standard limit is automatically skipped using your `op_timer`/`ed_timer` countdowns.
-2.  **Long Chapters (> ~91s):** If a recognized OP/ED is unusually long, it is flagged as a "Long" chapter.
-    *   By default (`long_skip = false`), the script will **pause and prompt you**: `Skip? Press Space`.
-    *   If you enable **Long Skip** (`Ctrl+D`), the script will auto-skip these longer chapters, *provided* they are under your dynamic `max_duration` (default `100.0`s).
+# 🧠 Standard vs. Long Skips
 
-### ⚡ Instant Skip Mode
-Instead of setting timers to `0.0`, you can use the `instant_skip` variable.
-*   `"off"`: Normal countdown behavior.
-*   `"op"` / `"ed"` / `"both"`: The script will instantly teleport to the end of the chapter the exact millisecond it begins.
+To prevent accidental skipping of unusually long narrative sections, the script uses a two-tier system.
 
-### ⏱️ Timers & Lead-in
-*   **`op_timer` / `ed_timer`**: The total warning time before a skip occurs.
-*   **`leadin`**: How much of that countdown happens *after* the OP/ED has already started.
-    *   *Example:* `op_timer = 5.0` and `op_leadin = 2.0` means the countdown starts **3 seconds before** the OP begins, and finishes **2 seconds into** the OP.
+### 1. Standard Auto-Skip
+
+Recognized OP/ED chapters within the internal standard duration limit are automatically skipped using the configured OP/ED countdown.
+
+For example:
+
+```text
+Opening — 89 seconds
+```
+
+is treated as a normal OP and can be automatically skipped.
+
+### 2. Long Chapters
+
+Recognized OP/ED chapters exceeding the internal standard limit are classified as **Long**.
+
+By default:
+
+```lua
+long_skip = false
+```
+
+the script will pause and display a prompt such as:
+
+```text
+Skip? Press Space
+```
+
+You can then press **Space** to skip the chapter manually.
+
+Alternatively, enable Long Skip with:
+
+```text
+Ctrl + D
+```
+
+When enabled, recognized long OP/ED chapters will be automatically skipped as long as they are within:
+
+```lua
+max_duration
+```
 
 ---
 
-## 🔬 Under the Hood: How It Works
+# ⚡ Instant Skip Mode
 
-### 1. Keyword Matching & Protection
-The script scans embedded chapter titles. It looks for strict patterns (`OP`, `NCOP`, `Ending`, `エンディング`, etc.). Crucially, it checks against a **Protected List**. If a chapter is named `Prologue` or `Recap`, it is completely ignored, even if it contains the word "Opening".
+You can instantly teleport to the end of a detected OP or ED instead of using the countdown.
 
-### 2. Heuristic Scoring Engine
-If a video lacks chapter names, the script falls back to math. It analyzes all unnamed chapters and assigns a "score" based on:
-*   **Duration:** Penalizes chapters that are too short or too long (Target: ~90s).
-*   **Timeline Position:** OPs are heavily favored if they occur around the **18%** mark of the video. EDs are favored around the **92%** mark.
-The highest-scoring chapters are selected as the OP/ED.
+The configuration option is:
+
+```lua
+instant_skip = "off"
+```
+
+Available values:
+
+| Value    | Behavior                        |
+| -------- | ------------------------------- |
+| `"off"`  | Normal countdown behavior       |
+| `"op"`   | Instantly skip OPs              |
+| `"ed"`   | Instantly skip EDs              |
+| `"both"` | Instantly skip both OPs and EDs |
+
+You can also cycle through these modes during playback with:
+
+```text
+Alt + D
+```
+
+This allows you to change the behavior without editing the configuration file or restarting mpv.
 
 ---
 
-## ❓ FAQ / Troubleshooting
+# ⏱️ Timers & Lead-in
 
-**Q: An OP was detected, but it didn't auto-skip. Instead, it asked me to press Space. Why?**
-**A:** The OP is likely longer than the internal standard limit (~91 seconds). The script is protecting you from skipping a massive chunk of the episode. You can either press `Space` to skip it manually, or press `Ctrl+D` to enable "Long Skip" mode for the rest of your session.
+The OP and ED timers determine how long the warning countdown lasts.
 
-**Q: I want to watch the OP this time, but it keeps skipping!**
-**A:** Press `Alt+A` (for OP) or `Alt+S` (for ED) to toggle skipping off for the current session. Alternatively, press `Space` during the countdown to cancel it.
+```lua
+op_timer = 5.0
+ed_timer = 4.0
+```
 
-**Q: The script skipped a recap or preview by mistake.**
-**A:** The heuristic engine might have misidentified it. You can increase `heuristic_min` in the config to force the script to only look for longer chapters, or rely on properly named chapters if your media library supports them.
+The `leadin` values determine how much of that countdown occurs **after the OP/ED has actually started**.
+
+For example:
+
+```lua
+op_timer = 5.0
+op_leadin = 2.0
+```
+
+means:
+
+* Countdown begins **3 seconds before** the OP.
+* The OP starts.
+* Countdown continues for another **2 seconds**.
+* The script skips to the end of the OP.
+
+This allows the warning to appear slightly before the actual OP while still giving you a brief glimpse of the opening.
 
 ---
 
-## 💬 Feedback & Contact
+# 🧠 How Detection Works
 
-This project started as a personal tool, but I'm always open to reasonable suggestions, bug reports, and feature requests! 
+The script uses multiple detection layers rather than relying on a single keyword.
 
-* **GitHub:** Feel free to open an Issue or Pull Request for bugs or code improvements.
-* **Discord:** Want to chat about a feature idea or need help setting it up? Add me on Discord: **`op.boyz`**
+## 1. Keyword Matching & Protection
 
-*Enjoy your uninterrupted anime marathons! 🍿*
+The script scans embedded chapter titles for recognized OP/ED patterns, including names such as:
+
+```text
+OP
+Opening
+Opening 1
+NCOP
+OP1
+ED
+Ending
+Ending 1
+NCED
+```
+
+and relevant Japanese terminology.
+
+At the same time, the script maintains a **protected context list**.
+
+Chapters containing narrative-oriented names such as:
+
+```text
+Prologue
+Recap
+Preview
+Scene
+Post-Credits
+```
+
+are protected from being incorrectly classified as an OP/ED.
+
+This helps prevent situations where a chapter happens to contain a keyword such as `Opening` but is actually part of the episode's story.
+
+---
+
+# 🧩 Smart Chapter Clustering
+
+Some releases split an OP or ED across multiple consecutive chapters.
+
+For example:
+
+```text
+00:00 - 00:03  Opening
+00:03 - 01:28  Opening 1
+01:28 - 01:30  Opening 2
+```
+
+Rather than treating these as separate skips, the script can combine adjacent matching sections into one continuous range.
+
+This allows split or oddly structured chapter metadata to be handled as a single OP/ED.
+
+---
+
+# 🔮 Heuristic Fallback
+
+Not every video has useful chapter names.
+
+When chapter metadata is present but unnamed or otherwise insufficient, the script can fall back to heuristic detection.
+
+The heuristic considers factors such as:
+
+### Duration
+
+OPs and EDs commonly fall within a particular duration range.
+
+Very short or excessively long chapters receive lower scores.
+
+The minimum duration considered by the fallback engine can be adjusted with:
+
+```lua
+heuristic_min = 75.0
+```
+
+### Timeline Position
+
+The script also considers where a chapter occurs within the episode.
+
+For example:
+
+* OP candidates are favored around the **early portion** of the episode, roughly around the 18% mark.
+* ED candidates are favored near the **end**, roughly around the 92% mark.
+
+These are scoring preferences rather than fixed positions, allowing the script to adapt to episodes with different structures.
+
+---
+
+# 🔄 Smart Re-Arming
+
+When an OP/ED is skipped, the script remembers that it has already handled that section.
+
+If you rewind far enough before the trigger point, the section can be **re-armed**:
+
+```lua
+allow_reskip = true
+```
+
+This means you can rewind and watch the OP/ED again without having to restart the episode.
+
+Set:
+
+```lua
+allow_reskip = false
+```
+
+if you do not want previously skipped sections to become eligible again.
+
+---
+
+# 🎛️ Live Controls
+
+Several settings can be modified while mpv is playing.
+
+### OP Skipping
+
+```text
+Alt + A
+```
+
+Toggles OP skipping.
+
+### ED Skipping
+
+```text
+Alt + S
+```
+
+Toggles ED skipping.
+
+### Instant Skip
+
+```text
+Alt + D
+```
+
+Cycles through:
+
+```text
+Off → OP → ED → Both → Off
+```
+
+### Long Skip
+
+```text
+Ctrl + D
+```
+
+Toggles automatic skipping of recognized long chapters.
+
+### Maximum Duration
+
+```text
+Ctrl + Right
+```
+
+Increases:
+
+```text
+max_duration
+```
+
+by 0.5 seconds.
+
+```text
+Ctrl + Left
+```
+
+decreases it by 0.5 seconds.
+
+These adjustments apply immediately and do not require restarting mpv.
+
+---
+
+# ❓ FAQ / Troubleshooting
+
+### Q: The script loads, but Alt+A / Alt+S / Ctrl+D etc. do nothing.
+
+**A:** Make sure you added the required `script-binding` entries to `input.conf`.
+
+The Lua script does **not** automatically assign these keys.
+
+Your `input.conf` should contain:
+
+```text
+ALT+a        script-binding auto_skip/toggle-op
+ALT+s        script-binding auto_skip/toggle-ed
+ALT+d        script-binding auto_skip/cycle-instant
+CTRL+d       script-binding auto_skip/toggle-long-skip
+CTRL+RIGHT   repeatable script-binding auto_skip/max-duration-increase
+CTRL+LEFT    repeatable script-binding auto_skip/max-duration-decrease
+```
+
+After modifying `input.conf`, restart mpv.
+
+---
+
+### Q: Automatic OP/ED skipping works, but the keyboard controls don't.
+
+**A:** This is expected if the `input.conf` bindings have not been added.
+
+Automatic detection and keyboard control are separate:
+
+```text
+auto_skip.lua
+      │
+      ├── Automatic detection
+      ├── Automatic skipping
+      └── Script bindings
+              │
+              ▼
+         input.conf
+              │
+              ▼
+          Keyboard
+```
+
+The Lua script provides the functionality; `input.conf` assigns keys to it.
+
+---
+
+### Q: An OP was detected, but the script asked me to press Space instead of automatically skipping it.
+
+**A:** The OP is probably longer than the internal standard limit and was therefore classified as a **Long Skip**.
+
+By default:
+
+```lua
+long_skip = false
+```
+
+This is intentional protection against accidentally skipping a large section of an episode.
+
+You can:
+
+* Press **Space** to confirm the skip.
+* Enable Long Skip with **Ctrl+D**.
+* Increase `max_duration` if necessary.
+
+---
+
+### Q: I want to watch the OP this time, but it keeps skipping.
+
+**A:** Press:
+
+```text
+Alt + A
+```
+
+to temporarily disable OP skipping.
+
+For ED:
+
+```text
+Alt + S
+```
+
+You can also press **Space** during an active countdown to cancel the pending automatic skip.
+
+---
+
+### Q: The script skipped a recap or preview by mistake.
+
+**A:** Heuristic detection is inherently less reliable than properly named chapter metadata.
+
+Try increasing:
+
+```lua
+heuristic_min
+```
+
+so that the fallback engine considers only longer chapters.
+
+If possible, releases with accurate chapter names are preferable because the keyword-based detector has more information to work with.
+
+---
+
+### Q: I changed `input.conf`, but the keybindings still don't work.
+
+**A:** Make sure:
+
+1. `auto_skip.lua` is actually loaded.
+2. The binding names exactly match the functions exposed by the script.
+3. The entries are in mpv's actual `input.conf`.
+4. You restarted mpv after modifying the file.
+5. Another mpv binding or application is not intercepting the key combination.
+
+---
+
+# 📁 File Locations
+
+### Windows
+
+```text
+%APPDATA%\mpv\scripts\auto_skip.lua
+%APPDATA%\mpv\input.conf
+```
+
+### Linux / macOS
+
+```text
+~/.config/mpv/scripts/auto_skip.lua
+~/.config/mpv/input.conf
+```
+
+---
+
+# 💬 Feedback & Contact
+
+This project started as a personal tool, but reasonable suggestions, bug reports, and feature requests are welcome.
+
+* **GitHub:** Open an Issue or Pull Request for bugs, improvements, or feature requests.
+* **Discord:** `op.boyz`
+
+Enjoy your uninterrupted anime marathons! 🍿
