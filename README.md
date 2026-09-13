@@ -122,9 +122,11 @@ The highest-scoring chapters are selected as the OP/ED.
 
 ---
 
-## 🤝 Contributing
+## 💬 Feedback & Contact
 
-Contributions, issue reports, and feature requests are highly appreciated!
-If you find a false positive, have a keyword that should be added to the protected list, or want to improve the heuristic scoring algorithm, please open an Issue or Pull Request.
+This project started as a personal tool, but I'm always open to reasonable suggestions, bug reports, and feature requests! 
+
+* **GitHub:** Feel free to open an Issue or Pull Request for bugs or code improvements.
+* **Discord:** Want to chat about a feature idea or need help setting it up? Add me on Discord: **`op.boyz`**
 
 *Enjoy your uninterrupted anime marathons! 🍿*
