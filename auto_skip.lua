@@ -1,44 +1,67 @@
 local mp = require('mp')
 
+-- ============================================================
 -- USER CONFIGURATION
+-- ============================================================
 local config = {
     -- Master Toggles
     skip_op = true,
     skip_ed = true,
 
     -- Behavioral Features
-    instant_skip = "off",   -- "off", "op", "ed", "both". Alt+d cycles off -> op -> ed -> both -> off.
-    long_skip = false,          -- Ctrl+d toggles auto-skipping recognized long OP/ED chapters up to max_duration.
-    cancel_auto_resume = true,  -- Pressing Space cancels auto-skip & resumes playback
-    allow_reskip = true,        -- Rewinding before trigger re-arms skip
+    instant_skip = "off",       -- "off", "op", "ed", "both". Alt+d cycles.
+    long_skip = false,          -- Ctrl+d toggles auto-skipping recognized long OP/ED chapters.
+    cancel_auto_resume = true,  -- Pressing Space cancels auto-skip & resumes playback.
+    allow_reskip = true,        -- Rewinding before trigger re-arms skip.
 
     -- Timing Configurations (in seconds)
-    op_timer = 5.0,             -- Set to 0.0 for Instant Teleport mode
+    op_timer = 5.0,             -- Set to 0.0 for instant teleport mode.
     ed_timer = 4.0,
     op_leadin = 2.0,
     ed_leadin = 2.0,
-    manual_prompt_timer = 5.0,  -- Duration for the "Skip? Press Space" prompt
+    manual_prompt_timer = 5.0,  -- Duration for the "Skip? Press Space" prompt.
 
     -- Long Skip threshold, session-adjustable with Ctrl+Right / Ctrl+Left.
-    -- This is used only for Long Skip eligibility, not for the fixed standard OP/ED limit.
+    -- This is used only for Long Skip eligibility, not for standard OP/ED limit.
     max_duration = 100.0,
 
-    -- Duration Limits (in seconds)
-    heuristic_min = 75.0        -- Minimum duration for fallback keyword-less detection
+    -- ========================================================
+    -- STANDARD OP/ED DURATION WINDOW
+    -- ========================================================
+    --
+    -- Normal OP/ED chapters must satisfy:
+    --
+    --   duration >= min_duration
+    --   duration <= standard_max_duration + duration_tolerance
+    --
+    -- With defaults:
+    --   min_duration = 65.0
+    --   standard_max_duration = 90.0
+    --   duration_tolerance = 1.5
+    --
+    -- Normal OP/ED chapters are accepted from 65s up to 91.5s.
+    --
+    -- If you want a stricter maximum of about 91.0s, set:
+    --   duration_tolerance = 1.0
+    --
+    -- If you want no tolerance, set:
+    --   duration_tolerance = 0.0
+    -- ========================================================
+    min_duration = 65.0,
+    standard_max_duration = 90.0,
+    duration_tolerance = 1.5,
+
+    -- Minimum duration for fallback keyword-less detection.
+    -- It is automatically forced to be at least min_duration.
+    heuristic_min = 65.0,
 }
 
--- Fixed internal limit for normal OP/ED auto-skip.
--- OP/ED chapters at or below this are treated as standard automatic ranges.
--- This is intentionally fixed and is not controlled by max_duration.
-local STANDARD_MAX_DURATION = 90.0
-
--- Fractional chapter durations are common.
--- This tolerance makes "97" include chapters like 97.35s.
--- If you want stricter behavior, set this to 0.001.
-local DURATION_TOLERANCE = 1.0
+-- ============================================================
+-- CONFIG NORMALIZATION
+-- ============================================================
 
 local function clamp_max_duration(v)
-    v = tonumber(v) or 97.0
+    v = tonumber(v) or 100.0
     v = math.floor(v * 2 + 0.5) / 2
     if v < 1.0 then v = 1.0 end
     if v > 600.0 then v = 600.0 end
@@ -48,27 +71,52 @@ end
 if type(config.instant_skip) ~= "string" then
     config.instant_skip = "off"
 end
+
 config.instant_skip = config.instant_skip:lower()
 
 local valid_instant_modes = {
     off = true,
     op = true,
     ed = true,
-    both = true
+    both = true,
 }
+
 if not valid_instant_modes[config.instant_skip] then
     config.instant_skip = "off"
 end
 
 if type(config.long_skip) ~= "boolean" then
-    config.long_skip = (config.long_skip == "on"
+    config.long_skip = (
+        config.long_skip == "on"
         or config.long_skip == "true"
-        or config.long_skip == 1)
+        or config.long_skip == 1
+    )
 end
 
 config.max_duration = clamp_max_duration(config.max_duration)
 
+config.op_timer = math.max(0.0, tonumber(config.op_timer) or 5.0)
+config.ed_timer = math.max(0.0, tonumber(config.ed_timer) or 4.0)
+config.op_leadin = math.max(0.0, tonumber(config.op_leadin) or 2.0)
+config.ed_leadin = math.max(0.0, tonumber(config.ed_leadin) or 2.0)
+config.manual_prompt_timer = math.max(0.5, tonumber(config.manual_prompt_timer) or 5.0)
+
+config.min_duration = math.max(0.0, tonumber(config.min_duration) or 65.0)
+config.standard_max_duration = math.max(
+    config.min_duration,
+    tonumber(config.standard_max_duration) or 90.0
+)
+config.duration_tolerance = math.max(0.0, tonumber(config.duration_tolerance) or 1.5)
+
+config.heuristic_min = tonumber(config.heuristic_min) or config.min_duration
+if config.heuristic_min < config.min_duration then
+    config.heuristic_min = config.min_duration
+end
+
+-- ============================================================
 -- RUNTIME STATE
+-- ============================================================
+
 local ranges = {}
 local session_ignored = {}
 local active_timer = nil
@@ -77,9 +125,24 @@ local current_file_path = nil
 local manual_pending = nil
 local manual_timer = nil
 
+-- ============================================================
+-- DURATION HELPERS
+-- ============================================================
+
+local function standard_max_limit()
+    return config.standard_max_duration + config.duration_tolerance
+end
+
+local function is_standard_op_ed_duration(d)
+    return type(d) == "number"
+        and d >= config.min_duration
+        and d <= standard_max_limit()
+end
+
+-- ============================================================
 -- KEYWORD PATTERNS
--- Patterns are intentionally without trailing spaces.
--- title_matches() uses word-boundary matching for ASCII patterns.
+-- ============================================================
+
 local strict_op_patterns = {
     "op",
     "opening",
@@ -88,7 +151,7 @@ local strict_op_patterns = {
     "ncop",
     "creditless op",
     "opening a",
-    "opening 1"
+    "opening 1",
 }
 
 local strict_ed_patterns = {
@@ -101,11 +164,11 @@ local strict_ed_patterns = {
     "ending a",
     "ending 1",
     "credits",
-    "credits start"
+    "credits start",
 }
 
 local ambiguous_op_patterns = {
-    "intro"
+    "intro",
 }
 
 local ambiguous_ed_patterns = {}
@@ -121,7 +184,7 @@ local protected_patterns = {
     "ending end",
     "credits end",
     "post-credits",
-    "post credits"
+    "post credits",
 }
 
 local function merge_patterns(t1, t2)
@@ -137,7 +200,10 @@ local function merge_patterns(t1, t2)
     return res
 end
 
+-- ============================================================
 -- UTILITIES
+-- ============================================================
+
 local function clear_timer()
     if active_timer then
         active_timer:kill()
@@ -186,9 +252,11 @@ local function base_type_of(t)
     if t == "op" or t == "long_op" or t == "manual_op" then
         return "op"
     end
+
     if t == "ed" or t == "long_ed" or t == "manual_ed" then
         return "ed"
     end
+
     return nil
 end
 
@@ -219,10 +287,11 @@ local function is_auto_eligible_range(r)
     end
 
     if is_long_type(r.type) then
-        return config.long_skip and range_duration(r) <= config.max_duration + DURATION_TOLERANCE
+        return config.long_skip
+            and range_duration(r) <= config.max_duration + config.duration_tolerance
     end
 
-    return true
+    return is_standard_op_ed_duration(range_duration(r))
 end
 
 local function instant_skip_applies(range_type)
@@ -235,13 +304,15 @@ local function instant_skip_applies(range_type)
     return s == "both" or s == base
 end
 
+-- ============================================================
 -- OSD HELPERS
+-- ============================================================
+
 local ASS_WHITE = "&HFFFFFF&"
 local ASS_GRAY = "&H888888&"
 local ASS_AQUA = "&HFFFF00&"
 local ASS_LIME = "&H00FF00&"
 local ASS_GREEN = "&H00C000&"
-
 local OSD_PREFIX = "{\\an7\\pos(3,3)\\fs8\\b1}"
 
 local function ass_wrap(text)
@@ -264,6 +335,7 @@ local function format_seconds(v)
     end
 
     local rounded = math.floor(v * 10 + 0.5) / 10
+
     if math.abs(rounded - math.floor(rounded)) < 0.001 then
         return string.format("%d", math.floor(rounded))
     else
@@ -358,7 +430,10 @@ local function status(name, val)
     show_osd(text, 4)
 end
 
+-- ============================================================
 -- MANUAL PROMPT ENGINE
+-- ============================================================
+
 local function clear_manual_prompt()
     if manual_timer then
         manual_timer:kill()
@@ -380,29 +455,33 @@ local function execute_manual_skip()
     local r = manual_pending
     clear_manual_prompt()
 
-    local type_name = get_display_type(r.type)
+    local label = get_display_type(r.type)
+    local verb = is_long_type(r.type) and "✓ SKIPPED LONG " or "✓ SKIPPED "
 
     mp.set_property_number("time-pos", r.end_)
-    show_osd(OSD_PREFIX .. ass_color("✓ SKIPPED LONG " .. type_name, ASS_WHITE), 2)
+    show_osd(OSD_PREFIX .. ass_color(verb .. label, ASS_WHITE), 2)
 end
 
 local function trigger_manual_prompt(r)
     manual_pending = r
-
     show_osd(OSD_PREFIX .. "{\\alpha&HA0&}Skip? Press Space", config.manual_prompt_timer)
-
     mp.add_forced_key_binding("SPACE", "manual-skip-space", execute_manual_skip)
     manual_timer = mp.add_timeout(config.manual_prompt_timer, clear_manual_prompt)
 end
 
--- HEURISTIC CHAPTER CLUSTERING ENGINE
+-- ============================================================
+-- CHAPTER SCAN / OP-ED DETECTION
+-- ============================================================
+
 local function scan_chapters()
     local filepath = mp.get_property("path")
+
     if filepath and filepath == current_file_path then
         return
     end
 
     current_file_path = filepath
+
     ranges = {}
     session_ignored = {}
     clear_timer()
@@ -411,64 +490,88 @@ local function scan_chapters()
 
     local chapters_native = mp.get_property_native("chapter-list")
     local duration = mp.get_property_number("duration")
-    if not chapters_native or #chapters_native == 0 or not duration then
+
+    if not chapters_native or #chapters_native == 0 or not duration or duration <= 0 then
         return
     end
 
     local has_strict_op, has_strict_ed = false, false
+
     for _, c in ipairs(chapters_native) do
         local title = (c.title or ""):lower()
-        if title_matches(title, strict_op_patterns) then has_strict_op = true end
-        if title_matches(title, strict_ed_patterns) then has_strict_ed = true end
+        if title_matches(title, strict_op_patterns) then
+            has_strict_op = true
+        end
+        if title_matches(title, strict_ed_patterns) then
+            has_strict_ed = true
+        end
     end
 
-    local op_patterns = has_strict_op and strict_op_patterns or merge_patterns(strict_op_patterns, ambiguous_op_patterns)
-    local ed_patterns = has_strict_ed and strict_ed_patterns or merge_patterns(strict_ed_patterns, ambiguous_ed_patterns)
+    local op_patterns = has_strict_op
+        and strict_op_patterns
+        or merge_patterns(strict_op_patterns, ambiguous_op_patterns)
+
+    local ed_patterns = has_strict_ed
+        and strict_ed_patterns
+        or merge_patterns(strict_ed_patterns, ambiguous_ed_patterns)
 
     local current_protected = merge_patterns(protected_patterns)
+
     if has_strict_op then
         current_protected = merge_patterns(current_protected, ambiguous_op_patterns)
     end
+
     if has_strict_ed then
         current_protected = merge_patterns(current_protected, ambiguous_ed_patterns)
     end
 
+    local function classify_title(title)
+        if title_matches(title, current_protected) then
+            return nil
+        end
+
+        local is_op = title_matches(title, op_patterns)
+        local is_ed = title_matches(title, ed_patterns)
+
+        if is_op and not is_ed then
+            return "op"
+        end
+
+        if is_ed and not is_op then
+            return "ed"
+        end
+
+        return nil
+    end
+
     local raw_chapters = {}
+
     for i, c in ipairs(chapters_native) do
-        local start = c.time
-        local title = (c.title or ""):lower()
+        local start_time = c.time
         local next_start = (i == #chapters_native) and duration or chapters_native[i + 1].time
 
         table.insert(raw_chapters, {
-            start = start,
+            start = start_time,
             end_ = next_start,
-            title = title,
-            duration = next_start - start
+            title = (c.title or ""):lower(),
+            duration = next_start - start_time,
         })
     end
 
+    -- Cluster consecutive OP chapters and consecutive ED chapters.
     local chapters = {}
     local idx = 1
+
     while idx <= #raw_chapters do
         local cur = raw_chapters[idx]
+        local cur_type = classify_title(cur.title)
 
-        local is_op = title_matches(cur.title, op_patterns)
-            and not title_matches(cur.title, ed_patterns)
-            and not title_matches(cur.title, current_protected)
-
-        local is_ed = title_matches(cur.title, ed_patterns)
-            and not title_matches(cur.title, op_patterns)
-            and not title_matches(cur.title, current_protected)
-
-        if is_op or is_ed then
+        if cur_type then
             local end_time = cur.end_
             local lookahead = idx + 1
-            local current_target_patterns = is_op and op_patterns or ed_patterns
 
             while lookahead <= #raw_chapters do
-                local next_title = raw_chapters[lookahead].title
-                if title_matches(next_title, current_target_patterns)
-                    and not title_matches(next_title, current_protected) then
+                if classify_title(raw_chapters[lookahead].title) == cur_type then
                     end_time = raw_chapters[lookahead].end_
                     lookahead = lookahead + 1
                 else
@@ -480,7 +583,7 @@ local function scan_chapters()
                 start = cur.start,
                 end_ = end_time,
                 title = cur.title,
-                duration = end_time - cur.start
+                duration = end_time - cur.start,
             })
 
             idx = lookahead
@@ -490,35 +593,52 @@ local function scan_chapters()
         end
     end
 
-    local best_op, best_ed = { score = math.huge }, { score = math.huge }
+    local best_op = { score = math.huge }
+    local best_ed = { score = math.huge }
     local found_op, found_ed = false, false
 
     for _, c in ipairs(chapters) do
         local t, d = c.title, c.duration
-        local is_op = title_matches(t, op_patterns)
-        local is_ed = title_matches(t, ed_patterns)
-        local protected = title_matches(t, current_protected)
+        local ctype = classify_title(t)
 
-        if is_op and not protected then
-            found_op = true
-
-            if d <= STANDARD_MAX_DURATION + DURATION_TOLERANCE then
-                table.insert(ranges, { start = c.start, end_ = c.end_, type = "op" })
-            else
-                table.insert(ranges, { start = c.start, end_ = c.end_, type = "long_op" })
+        if ctype == "op" then
+            if is_standard_op_ed_duration(d) then
+                found_op = true
+                table.insert(ranges, {
+                    start = c.start,
+                    end_ = c.end_,
+                    type = "op",
+                })
+            elseif d > standard_max_limit() then
+                found_op = true
+                table.insert(ranges, {
+                    start = c.start,
+                    end_ = c.end_,
+                    type = "long_op",
+                })
             end
-        elseif is_ed and not protected then
-            found_ed = true
-
-            if d <= STANDARD_MAX_DURATION + DURATION_TOLERANCE then
-                table.insert(ranges, { start = c.start, end_ = c.end_, type = "ed" })
-            else
-                table.insert(ranges, { start = c.start, end_ = c.end_, type = "long_ed" })
+            -- If d < min_duration, it is intentionally ignored.
+        elseif ctype == "ed" then
+            if is_standard_op_ed_duration(d) then
+                found_ed = true
+                table.insert(ranges, {
+                    start = c.start,
+                    end_ = c.end_,
+                    type = "ed",
+                })
+            elseif d > standard_max_limit() then
+                found_ed = true
+                table.insert(ranges, {
+                    start = c.start,
+                    end_ = c.end_,
+                    type = "long_ed",
+                })
             end
-        elseif not protected then
-            -- Heuristic fallback remains limited to the fixed standard OP/ED length.
-            if d >= config.heuristic_min and d <= STANDARD_MAX_DURATION + DURATION_TOLERANCE then
-                local dur_penalty = math.exp(math.abs(d - 90) / 10) - 1
+            -- If d < min_duration, it is intentionally ignored.
+        else
+            -- Heuristic fallback remains limited to the standard OP/ED duration window.
+            if d >= config.heuristic_min and is_standard_op_ed_duration(d) then
+                local dur_penalty = math.exp(math.abs(d - config.standard_max_duration) / 10) - 1
                 local pos_pct = c.start / duration
 
                 if pos_pct < 0.35 then
@@ -539,36 +659,34 @@ local function scan_chapters()
     end
 
     if not found_op and best_op.chapter then
-        local d = best_op.chapter.duration
-        local typ = d <= STANDARD_MAX_DURATION + DURATION_TOLERANCE and "op" or "long_op"
-
         table.insert(ranges, {
             start = best_op.chapter.start,
             end_ = best_op.chapter.end_,
-            type = typ
+            type = "op",
         })
     end
 
     if not found_ed and best_ed.chapter then
-        local d = best_ed.chapter.duration
-        local typ = d <= STANDARD_MAX_DURATION + DURATION_TOLERANCE and "ed" or "long_ed"
-
         table.insert(ranges, {
             start = best_ed.chapter.start,
             end_ = best_ed.chapter.end_,
-            type = typ
+            type = "ed",
         })
     end
 end
 
+-- ============================================================
 -- TICK ENGINE
+-- ============================================================
+
 local function tick()
     if not pending then
         return
     end
 
     local base = base_type_of(pending.type)
-    local is_enabled = base and ((base == "op" and config.skip_op) or (base == "ed" and config.skip_ed))
+    local is_enabled = base
+        and ((base == "op" and config.skip_op) or (base == "ed" and config.skip_ed))
 
     if not is_enabled then
         clear_timer()
@@ -577,7 +695,16 @@ local function tick()
     end
 
     if is_long_type(pending.type) then
-        if not (config.long_skip and range_duration(pending) <= config.max_duration + DURATION_TOLERANCE) then
+        if not (
+            config.long_skip
+            and range_duration(pending) <= config.max_duration + config.duration_tolerance
+        ) then
+            clear_timer()
+            pending = nil
+            return
+        end
+    else
+        if not is_standard_op_ed_duration(range_duration(pending)) then
             clear_timer()
             pending = nil
             return
@@ -603,8 +730,9 @@ local function tick()
     end
 
     local color
+
     if instant_skip_applies(pending.type) or pending.late then
-        color = "00FF00" -- steady green, no blinking for instant skip / late long activation
+        color = "00FF00"
     else
         color = pos >= pending.start
             and (math.floor((mp.get_time() * 5) % 2) == 0 and "0000FF" or "FFFFFF")
@@ -618,7 +746,10 @@ local function tick()
     )
 end
 
+-- ============================================================
 -- AUTO SKIP HELPER
+-- ============================================================
+
 local function try_auto_skip(r, base, pos)
     local sig = get_range_signature(r)
     local timer = (base == "op") and config.op_timer or config.ed_timer
@@ -630,7 +761,6 @@ local function try_auto_skip(r, base, pos)
             show_osd(OSD_PREFIX .. ass_color("✓ SKIPPED " .. base:upper(), ASS_WHITE), 2)
             return true
         end
-
         return false
     end
 
@@ -655,6 +785,7 @@ local function try_auto_skip(r, base, pos)
         clear_timer()
         tick()
         active_timer = mp.add_periodic_timer(0.1, tick)
+
         return true
     elseif instant_skip_applies(base) and pos >= r.start and pos < r.end_ then
         session_ignored[sig] = true
@@ -666,7 +797,10 @@ local function try_auto_skip(r, base, pos)
     return false
 end
 
+-- ============================================================
 -- LIVE TIMELINE MONITOR
+-- ============================================================
+
 local function check(_, pos)
     if not pos then
         return
@@ -675,6 +809,7 @@ local function check(_, pos)
     if config.allow_reskip then
         for _, r in ipairs(ranges) do
             local sig = get_range_signature(r)
+
             if session_ignored[sig] then
                 if r.type == "manual_op" or r.type == "manual_ed" then
                     if pos < r.start - 0.5 then
@@ -709,7 +844,10 @@ local function check(_, pos)
         end
 
         if is_long_type(pending.type) then
-            if not (config.long_skip and range_duration(pending) <= config.max_duration + DURATION_TOLERANCE) then
+            if not (
+                config.long_skip
+                and range_duration(pending) <= config.max_duration + config.duration_tolerance
+            ) then
                 clear_timer()
                 pending = nil
             end
@@ -723,6 +861,7 @@ local function check(_, pos)
             if pos >= r.start and pos < r.end_ then
                 local enabled = (r.type == "manual_op" and config.skip_op)
                     or (r.type == "manual_ed" and config.skip_ed)
+
                 local sig = get_range_signature(r)
 
                 if enabled and not session_ignored[sig] and not manual_pending then
@@ -733,8 +872,11 @@ local function check(_, pos)
             end
         else
             local base = base_type_of(r.type)
+
             if base then
-                local enabled = (base == "op" and config.skip_op) or (base == "ed" and config.skip_ed)
+                local enabled = (base == "op" and config.skip_op)
+                    or (base == "ed" and config.skip_ed)
+
                 local sig = get_range_signature(r)
 
                 if enabled and not session_ignored[sig] then
@@ -761,7 +903,10 @@ local function check(_, pos)
     end
 end
 
+-- ============================================================
 -- ACTIONS & INTERRUPTS
+-- ============================================================
+
 local function on_seek()
     if manual_pending then
         clear_manual_prompt()
@@ -815,8 +960,9 @@ local function toggle_ed()
 end
 
 local function cycle_instant_skip()
-    local states = { "off", "both", "op", "ed" }
+    local states = { "off", "op", "ed", "both" }
     local current = type(config.instant_skip) == "string" and config.instant_skip:lower() or "off"
+
     local next_idx = 1
 
     for i, v in ipairs(states) do
@@ -831,6 +977,7 @@ local function cycle_instant_skip()
     -- Dynamically update pending countdown if one is actively running.
     if pending then
         local base = base_type_of(pending.type)
+
         if base == "op" or base == "ed" then
             local leadin = (base == "op") and config.op_leadin or config.ed_leadin
             local pos = mp.get_property_number("time-pos", 0)
@@ -857,7 +1004,10 @@ local function cycle_instant_skip()
     show_osd(text, 3)
 end
 
+-- ============================================================
 -- LONG SKIP HELPERS / TOGGLE
+-- ============================================================
+
 local function maybe_activate_current_long_range(allow_clear_current_ignored)
     if pending then
         return
@@ -882,6 +1032,7 @@ local function maybe_activate_current_long_range(allow_clear_current_ignored)
     end
 
     local base = base_type_of(r.type)
+
     if not base then
         return
     end
@@ -890,7 +1041,7 @@ local function maybe_activate_current_long_range(allow_clear_current_ignored)
         return
     end
 
-    if range_duration(r) > config.max_duration + DURATION_TOLERANCE then
+    if range_duration(r) > config.max_duration + config.duration_tolerance then
         return
     end
 
@@ -954,7 +1105,10 @@ local function adjust_max_duration(delta)
     end
 end
 
+-- ============================================================
 -- RUNTIME INITIALIZATION
+-- ============================================================
+
 mp.register_event("playback-restart", scan_chapters)
 mp.observe_property("time-pos", "number", check)
 mp.observe_property("pause", "bool", on_pause)
